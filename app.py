@@ -85,6 +85,41 @@ async def invoice_input_callback(request: Request):
     return JSONResponse({"success": True, "msg": "callback received"})
 
 
+
+@app.post("/get_purchase_list")
+def get_purchase_list(payload: PurchaseList):
+    """
+    接收采购子表列表：
+    请求体结构示例：
+    {
+      "purchase_items": [
+        {
+          "textField_mi8pp1we": "产品A",
+          "textField_mi8pp1wf": "A-001",
+          "numberField_mi8pp1wg": 100,
+          "numberField_mi8pp1wh": 12.5,
+          "textField_mi8pp1wi": "500ml",
+          "textField_mi8pp1wj": "试剂",
+          "textField_mi8pp1wk": "瓶"
+        }
+      ]
+    }
+    """
+
+    # 打日志看清楚解析结果
+    logger.info("收到采购明细，共 {} 条", len(payload.purchase_items))
+    for idx, item in enumerate(payload.purchase_items, start=1):
+        logger.info("第 {} 条: {}", idx, item.dict())
+
+    # 后面你可以在这里接“成本结转逻辑”
+    # 比如：遍历 payload.purchase_items 去生成成本结转 / 入库记录
+
+    # 先简单原样返回，确认宜搭传过来的结构是对的
+    return {
+        "count": len(payload.purchase_items),
+        "items": payload.purchase_items,
+    }
+
 # 方便直接 python app.py 跑，不一定非要用命令行
 if __name__ == "__main__":
     import uvicorn
