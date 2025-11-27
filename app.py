@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 
 from yida_client import get_dingtalk_access_token
 
+from schemas import PurchaseList
+
 
 
 # 加载 .env 里的配置（可选）
