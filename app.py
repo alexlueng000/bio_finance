@@ -91,51 +91,35 @@ async def invoice_input_callback(request: Request):
 
 @app.post("/get_purchase_list")
 async def get_purchase_list(request: Request):
-    # 1) 打印 Header
-    headers = dict(request.headers)
-    logger.info("[Headers] {}", headers)
+    raw_body = (await request.body()).decode("utf-8")
+    logger.info("[Raw Body UTF-8] {}", raw_body)
 
-    # 2) 打印 Raw Body（最关键）
-    raw_body = await request.body()
-    logger.info("[Raw Body] {}", raw_body)
+    # ⬇⬇⬇ 关键：解析表单格式 ⬇⬇⬇
+    form = parse_qs(raw_body)
+    # form 结构变成：
+    # { "purchase_items": ["[{...},{...}]" ] }
 
-    # 尝试 decode
-    try:
-        body_text = raw_body.decode("utf-8")
-    except:
-        body_text = str(raw_body)
-    logger.info("[Raw Body UTF-8] {}", body_text)
+    logger.info("[Parsed Form] {}", form)
 
-    # 尝试 JSON 解析
-    try:
-        json_body = json.loads(body_text)
-        logger.info("[Parsed JSON] {}", json_body)
-    except Exception as e:
-        logger.error("[JSON Parse Error] {}", e)
-        json_body = None
+    # 取出 purchase_items 字符串
+    raw_items = form.get("purchase_items", ["[]"])[0]
 
-    # 3) 尝试套 model（不会影响前面打印）
-    from pydantic import ValidationError
+    # URL decode 一下
+    raw_items = unquote(raw_items)
 
-    try:
-        if json_body is not None:
-            parsed = PurchaseList(**json_body)
-            logger.info("[Parsed PurchaseList] {}", parsed.dict())
-        else:
-            parsed = None
-    except ValidationError as e:
-        logger.error("[Pydantic Validation Error] {}", e.json())
-        parsed = None
+    logger.info("[Decoded JSON String] {}", raw_items)
 
-    # 返回你想看的全部内容
+    # 最后解析 JSON 数组
+    items = json.loads(raw_items)    
+    logger.info("[Final Parsed JSON] {}", items)
+
+    # 用你原来的模型校验
+    pl = PurchaseList(purchase_items=items)
+
     return {
-        "headers": headers,
-        "raw_body": body_text,
-        "parsed_json": json_body,
-        "parsed_model": parsed.dict() if parsed else None,
+        "count": len(pl.purchase_items),
+        "items": pl.purchase_items,
     }
-
-
 
 # 方便直接 python app.py 跑，不一定非要用命令行
 if __name__ == "__main__":
