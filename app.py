@@ -89,39 +89,53 @@ async def invoice_input_callback(request: Request):
 
 
 @app.post("/get_purchase_list")
-def get_purchase_list(payload: PurchaseList):
-    """
-    接收采购子表列表：
-    请求体结构示例：
-    {
-      "purchase_items": [
-        {
-          "textField_mi8pp1we": "产品A",
-          "textField_mi8pp1wf": "A-001",
-          "numberField_mi8pp1wg": 100,
-          "numberField_mi8pp1wh": 12.5,
-          "textField_mi8pp1wi": "500ml",
-          "textField_mi8pp1wj": "试剂",
-          "textField_mi8pp1wk": "瓶"
-        }
-      ]
-    }
-    """
+async def get_purchase_list(request: Request):
+    # 1) 打印 Header
+    headers = dict(request.headers)
+    logger.info("[Headers] {}", headers)
 
-    # 打日志看清楚解析结果
-    logger.info("收到采购明细，共 {} 条", len(payload.purchase_items))
-    for idx, item in enumerate(payload.purchase_items, start=1):
-        logger.info("第 {} 条: {}", idx, item.dict())
+    # 2) 打印 Raw Body（最关键）
+    raw_body = await request.body()
+    logger.info("[Raw Body] {}", raw_body)
 
-    # 后面你可以在这里接“成本结转逻辑”
-    # 比如：遍历 payload.purchase_items 去生成成本结转 / 入库记录
+    # 尝试 decode
+    try:
+        body_text = raw_body.decode("utf-8")
+    except:
+        body_text = str(raw_body)
+    logger.info("[Raw Body UTF-8] {}", body_text)
 
-    # 先简单原样返回，确认宜搭传过来的结构是对的
+    # 尝试 JSON 解析
+    try:
+        json_body = json.loads(body_text)
+        logger.info("[Parsed JSON] {}", json_body)
+    except Exception as e:
+        logger.error("[JSON Parse Error] {}", e)
+        json_body = None
+
+    # 3) 尝试套 model（不会影响前面打印）
+    from pydantic import ValidationError
+
+    try:
+        if json_body is not None:
+            parsed = PurchaseList(**json_body)
+            logger.info("[Parsed PurchaseList] {}", parsed.dict())
+        else:
+            parsed = None
+    except ValidationError as e:
+        logger.error("[Pydantic Validation Error] {}", e.json())
+        parsed = None
+
+    # 返回你想看的全部内容
     return {
-        "count": len(payload.purchase_items),
-        "items": payload.purchase_items,
+        "headers": headers,
+        "raw_body": body_text,
+        "parsed_json": json_body,
+        "parsed_model": parsed.dict() if parsed else None,
     }
 
+
+    
 # 方便直接 python app.py 跑，不一定非要用命令行
 if __name__ == "__main__":
     import uvicorn
