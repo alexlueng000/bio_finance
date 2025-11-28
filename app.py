@@ -1,5 +1,6 @@
 # app.py
 import os
+import json
 from typing import Dict, Any
 
 from fastapi import FastAPI, Request, HTTPException
@@ -135,7 +136,7 @@ async def get_purchase_list(request: Request):
     }
 
 
-    
+
 # 方便直接 python app.py 跑，不一定非要用命令行
 if __name__ == "__main__":
     import uvicorn
