@@ -123,49 +123,25 @@ def new_cost_record(date, product_name, batch_no, customer, invoice_type, invoic
     return data
 
 
-def build_cost_records_from_sales(items: List[SalesItem]) -> List[Dict[str, Any]]:
-    """
-    从 SalesItem 列表构造成本结转底表记录列表
-    """
-    records: List[Dict[str, Any]] = []
-    if not items:
-        return records
-
+def build_cost_records_from_sales(items: list[SalesItem]) -> list[dict]:
+    records: list[dict] = []
     for item in items:
-        # 日期：datetime -> 毫秒时间戳
-        date_val = item.dateField_mhd23657
-        if isinstance(date_val, datetime):
-            date_ms = int(date_val.timestamp() * 1000)
-        else:
-            # 如果前面没转成 datetime，而是原始毫秒，就直接用
-            date_ms = date_val
+        # 直接用毫秒时间戳
+        date_ms = item.dateField_mhd23657
 
-        # 数量：Decimal -> str（目标字段是 TextField）
-        qty_str = ""
-        if item.numberField_m7ecqbog is not None:
-            qty_str = str(item.numberField_m7ecqbog)
+        qty_str = str(item.numberField_m7ecqbog)
 
         record = new_cost_record(
             date=date_ms,
-            # 按你当前模型注释：
-            # 品名 -> textField_ll5xce5e
             product_name=item.textField_ll5xce5e,
-            # 批次号 -> textField_m7ecqboh
             batch_no=item.textField_m7ecqboh,
-            # 客户 -> textField_mhd23658
             customer=item.textField_mhd23658,
-            # 发票类别 -> textField_mhd23659
             invoice_type=item.textField_mhd23659 or "",
-            # 发票号 -> textField_mhd2365a
             invoice_no=item.textField_mhd2365a,
-            # 数量 -> numberField_m7ecqbog
             qty=qty_str,
-            # 销售订单号 -> textField_mhd23655
             sales_order_no=item.textField_mhd23655,
-            # 状态：这里先统一给“未结转”，你以后要区分已结转再改
             status="未结转",
         )
-
         records.append(record)
 
     return records

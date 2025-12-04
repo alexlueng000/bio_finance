@@ -51,8 +51,8 @@ class SalesItem(BaseModel):
     textField_mhd4ta0f: str
     # 销售订单号
     textField_mhd23655: str
-    # 销项票-开票日期
-    dateField_mhd23657: datetime
+    # 销项票-开票日期（宜搭给的是毫秒时间戳）
+    dateField_mhd23657: int   # ← 直接按 int 收，不要写 datetime
     # 客户名称
     textField_mhd23658: str
     # 发票类型
@@ -60,10 +60,17 @@ class SalesItem(BaseModel):
     # 销项票发票号
     textField_mhd2365a: str
     # 成本单价（不含税）
-    numberField_mims71hm: Decimal
+    numberField_mims71hm: Optional[Decimal] = None
     # 成本总价（不含税）
-    numberField_mims71hn: Decimal
-    
+    numberField_mims71hn: Optional[Decimal] = None
+
+    @field_validator("numberField_mims71hm", "numberField_mims71hn", mode="before")
+    @classmethod
+    def empty_str_to_none(cls, v):
+        # "" 或 None 统一成 None，其他交给 Decimal 正常解析
+        if v == "" or v is None:
+            return None
+        return v
 
 
 class SalesList(BaseModel):
