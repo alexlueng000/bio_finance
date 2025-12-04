@@ -137,7 +137,7 @@ async def get_sales_list(request: Request):
     form = parse_qs(raw_body)
     logger.info("[Parsed Form] {}", form)
 
-    raw_items = form.get("sales_items", ["[]"])[0]
+    raw_items = form.get("sales_list", ["[]"])[0]
     raw_items = unquote(raw_items)
     logger.info("[Decoded JSON String] {}", raw_items)
 
