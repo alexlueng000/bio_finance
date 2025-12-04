@@ -151,9 +151,6 @@ def build_cost_records_from_sales(items: list[SalesItem]) -> list[dict]:
 # 按产品明细生成一条结转成本记录
 
 def insert_cost_record(data: List[Dict[str, Any]]) -> None:
-    """
-    在【成本结转底表】插入一批记录
-    """
     access_token = get_dingtalk_access_token()
     headers = {
         "x-acs-dingtalk-access-token": access_token,
@@ -168,20 +165,29 @@ def insert_cost_record(data: List[Dict[str, Any]]) -> None:
         "updateFormDataJson": json.dumps(data, ensure_ascii=False),
     }
 
+    logger.info("[insert_cost_record] request body={}", body)
+
+    resp = requests.put(UPDATE_INSTANCE_URL, headers=headers, data=json.dumps(body))
+
+    # 先无条件打出来
+    text = resp.text
+    logger.info("[insert_cost_record] http_status={}, raw_body={}", resp.status_code, text)
+
     try:
-        resp = requests.post(INSERT_INSTANCE_URL, headers=headers, data=json.dumps(body))
         resp.raise_for_status()
-        resp_data = resp.json()
-        logger.info("[insert_cost_record] success, resp=%s", resp_data)
     except requests.exceptions.HTTPError as e:
+        # 再尝试解析成 json，看具体错误码
+        try:
+            err_json = resp.json()
+        except Exception:
+            err_json = None
+
         logger.error(
-            "[insert_cost_record] HTTPError: %s, body=%s",
-            e,
-            getattr(e.response, "text", ""),
+            "[insert_cost_record] HTTPError status={}, body_text={}, body_json={}",
+            resp.status_code,
+            text,
+            err_json,
         )
-        raise
-    except Exception as e:
-        logger.error("[insert_cost_record] failed: %s", e)
         raise
 
 
