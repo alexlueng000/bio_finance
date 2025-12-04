@@ -37,43 +37,30 @@ class PurchaseList(BaseModel):
 class SalesItem(BaseModel):
     # 品名
     textField_ll5xce5e: str
-
     # 批次号
     textField_m7ecqboh: str    
-
     # 规格
     textField_ll5xzsm0: str
-
     # 单价（元/瓶）
     numberField_m7ecqbof: Decimal
-
     # 数量 （瓶）
     numberField_m7ecqbog: Decimal
-
     # 总价
     numberField_m7ecqboe: Decimal
-
     # 产品编号
     textField_mhd4ta0f: str
-
     # 销售订单号
-    textField_mhd4ta0f: str
-    
+    textField_mhd23655: str
     # 销项票-开票日期
     dateField_mhd23657: datetime
-
     # 客户名称
     textField_mhd23658: str
-
     # 发票类型
     textField_mhd23659: str
-
     # 销项票发票号
     textField_mhd2365a: str
-
     # 成本单价（不含税）
     numberField_mims71hm: Decimal
-
     # 成本总价（不含税）
     numberField_mims71hn: Decimal
     

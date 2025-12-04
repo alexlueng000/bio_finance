@@ -14,6 +14,8 @@ from yida_client import get_dingtalk_access_token
 
 from schemas import PurchaseList, SalesList
 
+from output_invoice import process_sales_item, build_cost_records_from_sales, insert_cost_record
+
 
 
 
@@ -154,10 +156,13 @@ async def get_sales_list(request: Request):
     # 用你原来的模型校验
     sl = SalesList(sales_items=items)
 
-    return {
-        "count": len(sl.sales_items),
-        "items": sl.sales_items,
-    }
+    records = build_cost_records_from_sales(sl)
+    if not records:
+        logger.warning("[handle_sales_to_cost] 没有生成任何成本记录，payload=%s", sl)
+        return
+
+    # 2. 批量插入成本结转底表
+    insert_cost_record(records)
 
 
 # 方便直接 python app.py 跑，不一定非要用命令行
