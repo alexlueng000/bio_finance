@@ -167,7 +167,7 @@ def insert_cost_record(data: List[Dict[str, Any]]) -> None:
 
     logger.info("[insert_cost_record] request body={}", body)
 
-    resp = requests.put(UPDATE_INSTANCE_URL, headers=headers, data=json.dumps(body))
+    resp = requests.put(INSERT_INSTANCE_URL, headers=headers, data=json.dumps(body))
 
     # 先无条件打出来
     text = resp.text
