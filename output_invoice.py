@@ -161,7 +161,7 @@ def insert_cost_record(records: List[Dict[str, Any]]) -> None:
         "noExecuteExpression": True,
         "asynchronousExecution": False,
         "keepRunningAfterException": True,
-        "formUuid": input_invoice_inventory_table,
+        "formUuid": cost_carry_forward_table,
         "appType": "APP_JSXMR8UNH0GRZUNHO3Y2",
         "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",
         "userId": "203729096926868966",
