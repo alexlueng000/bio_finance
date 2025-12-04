@@ -18,7 +18,7 @@ from config import SEARCH_REQUEST_URL, UPDATE_INSTANCE_URL, INSERT_INSTANCE_URL
 def get_inventory_for_product(product_code: str) -> List[Dict[str, Any]]:
 
     product_search_conditions = {
-        "textField_mhlqrhyy": product_code
+        "textField_mhlqrhyy": product_code,
     }
 
     access_token = get_dingtalk_access_token()
@@ -149,7 +149,6 @@ def build_cost_records_from_sales(items: list[SalesItem]) -> list[dict]:
 
 # === 成本结转底表 ===
 # 按产品明细生成一条结转成本记录
-
 def insert_cost_record(records: List[Dict[str, Any]]) -> None:
     access_token = get_dingtalk_access_token()
     headers = {
@@ -201,119 +200,177 @@ def insert_cost_record(records: List[Dict[str, Any]]) -> None:
 def process_sales_item(item: SalesItem) -> None:
     """
     单条销项明细处理逻辑：
-      1）查进项票库存（FIFO）
-      2）按库存情况拆分为 结转成本 / 暂估
-      3）写【成本结转底表】
-      4）同步扣减【进项票库存】
-      5）写【发票统计】
-      6）更新【产品主数据】销项票总数量
+
+      1）查该产品的进项票库存（只看 remain_qty > 0，实际排序交给 get_inventory_for_product）
+      2）根据库存总量 vs 申请开票数量 → 生成【结转成本】/【暂估】记录
+      3）写入【成本结转底表】（一次性 batchSave）
+      4）按 FIFO 扣减【进项票库存】，更新已结转数量 / 剩余可用数量 / 状态
+
+    约定：
+      - get_inventory_for_product(product_code) 返回类似：
+        [{"id": "...", "remain_qty": "10", "used_qty": "5", "total_qty": "15", "invoice_date": 1747756800000}, ...]
+      - update_inventory_row(inv_id, used_qty, remain_qty, status) 负责把这三项写回宜搭
     """
 
-    # ==== 基础字段 ====
-    # 产品编号 —— 如果你改了字段名，这里一起改
-    product_code = item.textField_mhd4ta0f
-    product_name = item.textField_ll5xce5e   # 品名
+    # ========= 基础字段 =========
+    product_code = item.textField_mhd4ta0f          # 产品编号
+    product_name = item.textField_ll5xce5e          # 品名
+    batch_no = item.textField_m7ecqboh              # 批次号（产品批次）
+    customer_name = item.textField_mhd23658         # 客户
+    invoice_type = item.textField_mhd23659 or ""    # 发票类型
+    sales_invoice_no = item.textField_mhd2365a      # 销项票发票号
+    sales_order_no = item.textField_mhd23655        # 销售订单号
+    # 销项票开票日期：宜搭给的是毫秒时间戳，new_cost_record 也是照样传毫秒
+    sales_invoice_date_ms: int = item.dateField_mhd23657
 
     apply_qty: Decimal = item.numberField_m7ecqbog  # 本次销项数量（瓶）
 
-    sales_invoice_no = item.textField_mhd2365a      # 销项票发票号
-    sales_invoice_date = item.dateField_mhd23657    # datetime
-    customer_name = item.textField_mhd23658         # 客户名称
-
     logger.info(
-        "Process sales item: product_code={}, name={}, apply_qty={}",
+        "[process_sales_item] product_code=%s, name=%s, apply_qty=%s",
         product_code, product_name, apply_qty
     )
 
-    # ==== 1. 查询该产品的进项票库存（只取 remain_qty > 0，按进项票日期升序 → FIFO）====
-    inventory_rows = get_inventory_for_product(product_code) or []
-    available_qty = sum(Decimal(str(r["remain_qty"])) for r in inventory_rows)
+    # ========= 1. 查询进项票库存（FIFO，remain_qty > 0） =========
+    inventory_rows: List[Dict[str, Any]] = get_inventory_for_product(product_code) or []
+
+    # 只统计剩余可用数量 > 0 的库存
+    available_qty = Decimal("0")
+    for r in inventory_rows:
+        remain = Decimal(str(r.get("remain_qty", "0") or "0"))
+        if remain > 0:
+            available_qty += remain
 
     logger.info(
-        "Inventory for {}: available_qty={}, rows={}",
-        product_code, available_qty, len(inventory_rows)
+        "[process_sales_item] inventory rows=%s, available_qty=%s",
+        len(inventory_rows), available_qty
     )
 
-    # ==== 2. 根据库存情况决定 结转成本数量 / 暂估数量 ====
-    if not inventory_rows:
-        # 完全没有进项库存 → 全部暂估
-        logger.warning(
-            "No input inventory for product_code={}, apply_qty={} → 全部暂估",
-            product_code, apply_qty
-        )
+    # ========= 2. 计算结转成本数量 & 暂估数量 =========
+    if available_qty <= 0:
+        # 完全没有可用库存 → 全部暂估
         cost_qty = Decimal("0")
         estimate_qty = apply_qty
+    elif available_qty >= apply_qty:
+        # 库存充足：全部做结转成本
+        cost_qty = apply_qty
+        estimate_qty = Decimal("0")
     else:
-        if available_qty >= apply_qty:
-            # 库存充足：全额结转成本
-            cost_qty = apply_qty
-            estimate_qty = Decimal("0")
-        else:
-            # 库存不足：库存部分结转成本 + 其余暂估
-            cost_qty = available_qty
-            estimate_qty = apply_qty - available_qty
-
-    # ==== 3. 成本结转底表：结转成本记录 ====
-    if cost_qty > 0:
-        insert_cost_record({
-            "product_code": product_code,
-            "product_name": product_name,
-            "sales_invoice_no": sales_invoice_no,
-            "sales_invoice_date": sales_invoice_date.isoformat(),
-            "qty": str(cost_qty),
-            "record_type": "结转成本",
-            # 下面这些字段你根据成本结转底表的实际字段再补：
-            # "customer_name": customer_name,
-            # "sales_order_no": item.XXX,
-            # "unit_cost": str(item.numberField_mims71hm),
-            # "total_cost": ...
-        })
-
-        # ==== 3.1 FIFO 扣减库存 ====
-        remaining_to_consume = cost_qty
-
-        for row in inventory_rows:
-            if remaining_to_consume <= 0:
-                break
-
-            row_remain = Decimal(str(row["remain_qty"]))
-            row_used = Decimal(str(row.get("used_qty", "0")))
-
-            use_here = min(row_remain, remaining_to_consume)
-
-            new_used = row_used + use_here
-            new_remain = row_remain - use_here
-
-            if new_used == 0:
-                status = "未使用"
-            elif new_remain == 0:
-                status = "已用完"
-            else:
-                status = "部分使用"
-
-            update_inventory_row(
-                inv_id=row["id"],
-                used_qty=new_used,
-                remain_qty=new_remain,
-                status=status,
-            )
-
-            remaining_to_consume -= use_here
-
-    # ==== 4. 成本结转底表：暂估记录 ====
-    if estimate_qty > 0:
-        insert_cost_record({
-            "product_code": product_code,
-            "product_name": product_name,
-            "sales_invoice_no": sales_invoice_no,
-            "sales_invoice_date": sales_invoice_date.isoformat(),
-            "qty": str(estimate_qty),
-            "record_type": "暂估",
-            # 同样可带 customer_name / sales_order_no 等
-        })
-
+        # 库存不足：可用库存做结转成本 + 剩余做暂估
+        cost_qty = available_qty
+        estimate_qty = apply_qty - available_qty
 
     logger.info(
-        "Finished sales item: product_code={}, apply_qty={}, cost_qty={}, estimate_qty={}",
-        product_code, apply_qty, cost_qty, estimate_qty
+        "[process_sales_item] split: cost_qty=%s, estimate_qty=%s",
+        cost_qty, estimate_qty
+    )
+
+    # ========= 3. 生成【成本结转底表】记录 =========
+    cost_records: List[Dict[str, Any]] = []
+
+    # 3.1 结转成本记录
+    if cost_qty > 0:
+        cost_records.append(
+            new_cost_record(
+                date=sales_invoice_date_ms,
+                product_name=product_name,
+                batch_no=batch_no,
+                customer=customer_name,
+                invoice_type=invoice_type,
+                invoice_no=sales_invoice_no,
+                qty=str(cost_qty),
+                sales_order_no=sales_order_no,
+                status="结转成本",   # 按产品明细生成结转成本记录
+            )
+        )
+
+    # 3.2 暂估记录
+    if estimate_qty > 0:
+        cost_records.append(
+            new_cost_record(
+                date=sales_invoice_date_ms,
+                product_name=product_name,
+                batch_no=batch_no,
+                customer=customer_name,
+                invoice_type=invoice_type,
+                invoice_no=sales_invoice_no,
+                qty=str(estimate_qty),
+                sales_order_no=sales_order_no,
+                status="暂估",       # 按产品明细生成暂估记录
+            )
+        )
+
+    # 没任何记录就不用打 API
+    if cost_records:
+        insert_cost_record(cost_records)
+
+    # ========= 4. 按 FIFO 扣减【进项票库存】（只针对结转成本数量） =========
+    # 暂估数量不动库存
+    if cost_qty <= 0:
+        logger.info(
+            "[process_sales_item] cost_qty <= 0, skip inventory deduction for product_code=%s",
+            product_code,
+        )
+        logger.info(
+            "[process_sales_item] finished: product_code=%s, apply_qty=%s, cost_qty=%s, estimate_qty=%s",
+            product_code, apply_qty, cost_qty, estimate_qty
+        )
+        return
+
+    remaining_to_consume = cost_qty
+
+    # 按进项票日期正序扣减（保险起见再 sort 一次）
+    sorted_rows = sorted(
+        inventory_rows,
+        key=lambda r: r.get("invoice_date", 0)
+    )
+
+    for row in sorted_rows:
+        if remaining_to_consume <= 0:
+            break
+
+        row_remain = Decimal(str(row.get("remain_qty", "0") or "0"))
+        if row_remain <= 0:
+            continue
+
+        row_used = Decimal(str(row.get("used_qty", "0") or "0"))
+
+        # 本条最多可扣减的数量
+        use_here = min(row_remain, remaining_to_consume)
+        if use_here <= 0:
+            continue
+
+        new_used = row_used + use_here
+        new_remain = row_remain - use_here
+
+        # 状态规则：
+        #   已结转数量 = new_used
+        #   剩余可用数量 = new_remain
+        #   状态：
+        #     - new_used == 0         → 未使用
+        #     - new_remain == 0       → 已用完
+        #     - 其它                  → 部分使用
+        if new_used == 0:
+            status = "未使用"
+        elif new_remain == 0:
+            status = "已用完"
+        else:
+            status = "部分使用"
+
+        logger.info(
+            "[process_sales_item] consume inventory_row id=%s, use_here=%s, new_used=%s, new_remain=%s, status=%s",
+            row.get("id"), use_here, new_used, new_remain, status
+        )
+
+        update_inventory_row(
+            inv_id=row["id"],
+            used_qty=new_used,
+            remain_qty=new_remain,
+            status=status,
+        )
+
+        remaining_to_consume -= use_here
+
+    logger.info(
+        "[process_sales_item] finished: product_code=%s, apply_qty=%s, cost_qty=%s, estimate_qty=%s, remaining_to_consume=%s",
+        product_code, apply_qty, cost_qty, estimate_qty, remaining_to_consume
     )
