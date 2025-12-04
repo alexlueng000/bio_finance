@@ -169,7 +169,7 @@ def insert_cost_record(data: List[Dict[str, Any]]) -> None:
     }
 
     try:
-        resp = requests.put(UPDATE_INSTANCE_URL, headers=headers, data=json.dumps(body))
+        resp = requests.put(INSERT_INSTANCE_URL, headers=headers, data=json.dumps(body))
         resp.raise_for_status()
         resp_data = resp.json()
         logger.info("[insert_cost_record] success, resp=%s", resp_data)
