@@ -162,7 +162,7 @@ def insert_cost_record(data: List[Dict[str, Any]]) -> None:
         "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",
         "formUuid": input_invoice_inventory_table,
         "userId": "203729096926868966",
-        "updateFormDataJson": json.dumps(data, ensure_ascii=False),
+        "formDataJsonList": json.dumps(data, ensure_ascii=False),
     }
 
     logger.info("[insert_cost_record] request body={}", body)
