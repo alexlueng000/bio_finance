@@ -134,36 +134,26 @@ async def get_sales_list(request: Request):
     raw_body = (await request.body()).decode("utf-8")
     logger.info("[Raw Body UTF-8] {}", raw_body)
 
-    # ⬇⬇⬇ 关键：解析表单格式 ⬇⬇⬇
     form = parse_qs(raw_body)
-    # form 结构变成：
-    # { "sales_items": ["[{...},{...}]" ] }
-
     logger.info("[Parsed Form] {}", form)
 
-    # 取出 sales_items 字符串
     raw_items = form.get("sales_items", ["[]"])[0]
-
-    # URL decode 一下
     raw_items = unquote(raw_items)
-
     logger.info("[Decoded JSON String] {}", raw_items)
 
-    # 最后解析 JSON 数组
-    items = json.loads(raw_items)    
+    items = json.loads(raw_items)
     logger.info("[Final Parsed JSON] {}", items)
 
-    # 用你原来的模型校验
+    # Pydantic 校验并转换为 SalesItem 对象列表
     sl = SalesList(sales_items=items)
 
-    records = build_cost_records_from_sales(sl)
+    # ✅ 关键：传的是 List[SalesItem]，不是模型本身
+    records = build_cost_records_from_sales(sl.sales_items)
     if not records:
-        logger.warning("[handle_sales_to_cost] 没有生成任何成本记录，payload=%s", sl)
+        logger.warning("[handle_sales_to_cost] 没有生成任何成本记录，payload=%s", sl.model_dump())
         return
 
-    # 2. 批量插入成本结转底表
     insert_cost_record(records)
-
 
 # 方便直接 python app.py 跑，不一定非要用命令行
 if __name__ == "__main__":

@@ -123,69 +123,47 @@ def new_cost_record(date, product_name, batch_no, customer, invoice_type, invoic
     return data
 
 
-def build_cost_records_from_sales(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+def build_cost_records_from_sales(items: List[SalesItem]) -> List[Dict[str, Any]]:
     """
-    从前端提交的 payload 中解析 sales_list，构造成成本结转底表的记录列表。
-    payload 结构示例：
-    {
-        "sales_list": ['[{"textField_mhd23655": "...", ...}, {...}]']
-    }
+    从 SalesItem 列表构造成本结转底表记录列表
     """
-    raw_list = payload.get("sales_list", [])
-    if not raw_list:
-        return []
-
-    # 你现在传的是一个只含一个元素的 list，这个元素是一个 JSON 字符串
-    raw_json = raw_list[0]
-    try:
-        rows = json.loads(raw_json)
-    except Exception as e:
-        # 这里按你自己的 logger 来
-        logger.error("[build_cost_records_from_sales] 无法解析 sales_list JSON: %s", e)
-        return []
-
     records: List[Dict[str, Any]] = []
+    if not items:
+        return records
 
-    for row in rows:
-        # === 从原始销售数据里取字段 ===
-        # 销售订单号
-        sales_order_no = row.get("textField_mhd23655", "")
+    for item in items:
+        # 日期：datetime -> 毫秒时间戳
+        date_val = item.dateField_mhd23657
+        if isinstance(date_val, datetime):
+            date_ms = int(date_val.timestamp() * 1000)
+        else:
+            # 如果前面没转成 datetime，而是原始毫秒，就直接用
+            date_ms = date_val
 
-        # 品名
-        product_name = row.get("textField_ll5xce5e", "")
-
-        # 客户
-        customer = row.get("textField_mhd23658", "")
-
-        # 数量（注意 new_cost_record 里是字符串字段，这里转成 str）
-        qty = row.get("numberField_m7ecqbog", "")
-        qty_str = str(qty) if qty not in (None, "") else ""
-
-        # 发票号：你数据里这个看起来像发票号
-        invoice_no = row.get("textField_mhd2365a", "")
-
-        # 发票类别：数据里没有真正的“发票类别”，你只能“借用”一个字段，或者写死
-        invoice_type = row.get("textField_mhd23659", "")
-
-        # 批次号：你这批数据里比较像批次/出库号的是 CPXX 开头那一串
-        batch_no = row.get("textField_m7ecqboh", "")
-
-        # 日期：原始是毫秒时间戳，钉钉 DateField 支持毫秒时间戳，直接传
-        date = row.get("dateField_mhd23657", None)
-
-        # 状态：你没给，我默认一个“未结转”，你后面要改成别的自己调整
-        status = "暂估"
+        # 数量：Decimal -> str（目标字段是 TextField）
+        qty_str = ""
+        if item.numberField_m7ecqbog is not None:
+            qty_str = str(item.numberField_m7ecqbog)
 
         record = new_cost_record(
-            date=date,
-            product_name=product_name,
-            batch_no=batch_no,
-            customer=customer,
-            invoice_type=invoice_type,
-            invoice_no=invoice_no,
+            date=date_ms,
+            # 按你当前模型注释：
+            # 品名 -> textField_ll5xce5e
+            product_name=item.textField_ll5xce5e,
+            # 批次号 -> textField_m7ecqboh
+            batch_no=item.textField_m7ecqboh,
+            # 客户 -> textField_mhd23658
+            customer=item.textField_mhd23658,
+            # 发票类别 -> textField_mhd23659
+            invoice_type=item.textField_mhd23659 or "",
+            # 发票号 -> textField_mhd2365a
+            invoice_no=item.textField_mhd2365a,
+            # 数量 -> numberField_m7ecqbog
             qty=qty_str,
-            sales_order_no=sales_order_no,
-            status=status,
+            # 销售订单号 -> textField_mhd23655
+            sales_order_no=item.textField_mhd23655,
+            # 状态：这里先统一给“未结转”，你以后要区分已结转再改
+            status="未结转",
         )
 
         records.append(record)
@@ -195,18 +173,10 @@ def build_cost_records_from_sales(payload: Dict[str, Any]) -> List[Dict[str, Any
 
 # === 成本结转底表 ===
 # 按产品明细生成一条结转成本记录
+
 def insert_cost_record(data: List[Dict[str, Any]]) -> None:
     """
-
-    在【成本结转底表】插入一条记录。
-    data 至少包含：
-      - product_code
-      - product_name
-      - sales_invoice_no
-      - sales_invoice_date
-      - qty
-      - record_type: "结转成本" 或 "暂估"
-    其余字段（成本金额、客户等）你自己按表结构补。
+    在【成本结转底表】插入一批记录
     """
     access_token = get_dingtalk_access_token()
     headers = {
@@ -222,23 +192,21 @@ def insert_cost_record(data: List[Dict[str, Any]]) -> None:
         "updateFormDataJson": json.dumps(data, ensure_ascii=False),
     }
 
-    logger.info(
-       "插入成本结转底表成功"
-    )
-
     try:
         resp = requests.put(UPDATE_INSTANCE_URL, headers=headers, data=json.dumps(body))
         resp.raise_for_status()
-        data = resp.json()
-        logger.info("[insert_cost_record] success, resp={}", data)
+        resp_data = resp.json()
+        logger.info("[insert_cost_record] success, resp=%s", resp_data)
     except requests.exceptions.HTTPError as e:
-        # 打印一下钉钉返回的错误 body，方便你调字段名
-        logger.error("[insert_cost_record] HTTPError: {}, body={}", e, getattr(e.response, "text", ""))
+        logger.error(
+            "[insert_cost_record] HTTPError: %s, body=%s",
+            e,
+            getattr(e.response, "text", ""),
+        )
         raise
     except Exception as e:
-        logger.error("[insert_cost_record] failed: {}", e)
+        logger.error("[insert_cost_record] failed: %s", e)
         raise
-    
 
 
 # 处理一条销项票明细
