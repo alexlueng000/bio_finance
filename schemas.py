@@ -1,7 +1,7 @@
 # app/schemas.py
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, ConfigDict 
+from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
 from typing import Optional, List, Union
 from decimal import Decimal
 
