@@ -150,7 +150,7 @@ def build_cost_records_from_sales(items: list[SalesItem]) -> list[dict]:
 # === 成本结转底表 ===
 # 按产品明细生成一条结转成本记录
 
-def insert_cost_record(data: List[Dict[str, Any]]) -> None:
+def insert_cost_record(records: List[Dict[str, Any]]) -> None:
     access_token = get_dingtalk_access_token()
     headers = {
         "x-acs-dingtalk-access-token": access_token,
@@ -158,32 +158,38 @@ def insert_cost_record(data: List[Dict[str, Any]]) -> None:
     }
 
     body = {
+        "noExecuteExpression": True,
+        "asynchronousExecution": False,
+        "keepRunningAfterException": True,
+        "formUuid": input_invoice_inventory_table,
         "appType": "APP_JSXMR8UNH0GRZUNHO3Y2",
         "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",
-        "formUuid": input_invoice_inventory_table,
         "userId": "203729096926868966",
-        "formDataJsonList": json.dumps(data, ensure_ascii=False),
+        # 👇 关键：这里必须是“字符串列表”
+        "formDataJsonList": [
+            json.dumps(r, ensure_ascii=False) for r in records
+        ],
     }
 
-    logger.info("[insert_cost_record] request body={}", body)
+    logger.info("[insert_cost_record] request body=%s", body)
 
     resp = requests.post(INSERT_INSTANCE_URL, headers=headers, data=json.dumps(body))
-
-    # 先无条件打出来
     text = resp.text
-    logger.info("[insert_cost_record] http_status={}, raw_body={}", resp.status_code, text)
+    logger.info(
+        "[insert_cost_record] http_status=%s, raw_body=%s",
+        resp.status_code,
+        text,
+    )
 
     try:
         resp.raise_for_status()
     except requests.exceptions.HTTPError as e:
-        # 再尝试解析成 json，看具体错误码
         try:
             err_json = resp.json()
         except Exception:
             err_json = None
-
         logger.error(
-            "[insert_cost_record] HTTPError status={}, body_text={}, body_json={}",
+            "[insert_cost_record] HTTPError status=%s, body_text=%s, body_json=%s",
             resp.status_code,
             text,
             err_json,
