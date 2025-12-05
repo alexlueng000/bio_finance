@@ -231,20 +231,32 @@ def process_sales_item(item: SalesItem) -> None:
     )
 
     # ========= 1. 查询进项票库存（FIFO，remain_qty > 0） =========
-    inventory_rows: List[Dict[str, Any]] = get_inventory_for_product(product_code) or []
+    raw_rows = get_inventory_for_product(product_code)
 
-    # 只统计剩余可用数量 > 0 的库存
+    # 永远确保是 list
+    if not raw_rows:
+        inventory_rows = []
+    elif isinstance(raw_rows, list):
+        inventory_rows = raw_rows
+    elif isinstance(raw_rows, str):
+        try:
+            tmp = json.loads(raw_rows)
+            inventory_rows = tmp if isinstance(tmp, list) else []
+        except:
+            inventory_rows = []
+    else:
+        inventory_rows = []
+
     available_qty = Decimal("0")
+
     for r in inventory_rows:
+        if not isinstance(r, dict):
+            logger.warning("invalid inventory row: %r", r)
+            continue
+
         remain = Decimal(str(r.get("remain_qty", "0") or "0"))
         if remain > 0:
             available_qty += remain
-
-    logger.info(
-        "[process_sales_item] inventory rows=%s, available_qty=%s",
-        len(inventory_rows), available_qty
-    )
-
     # ========= 2. 计算结转成本数量 & 暂估数量 =========
     if available_qty <= 0:
         # 完全没有可用库存 → 全部暂估
@@ -279,7 +291,7 @@ def process_sales_item(item: SalesItem) -> None:
                 invoice_no=sales_invoice_no,
                 qty=str(cost_qty),
                 sales_order_no=sales_order_no,
-                status="结转成本",   # 按产品明细生成结转成本记录
+                status="已收票",   # 按产品明细生成结转成本记录
             )
         )
 
