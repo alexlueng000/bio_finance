@@ -130,30 +130,53 @@ async def get_purchase_list(request: Request):
 
 # 销项票录入接口（开票管理申请）
 @app.post("/get_sales_list")
-async def get_sales_list(request: Request):
-    raw_body = (await request.body()).decode("utf-8")
-    logger.info("[Raw Body UTF-8] {}", raw_body)
+async def get_sales_list(
+    sales_list: Optional[str] = Form(None),
+    request: Request = None,
+):
+    """
+    销项票录入接口（开票管理申请）：
+    - 宜搭回调：application/x-www-form-urlencoded，字段名为 sales_list
+    - Swagger 调试：直接在 Form 里粘 JSON 数组
+    """
 
-    form = parse_qs(raw_body)
-    logger.info("[Parsed Form] {}", form)
+    # 1. 优先走 Form（Swagger / 正常表单）
+    if sales_list is not None:
+        raw_items = sales_list
+        logger.info("[get_sales_list] from Form sales_list=%s", raw_items)
+    else:
+        # 2. 兜底：老的 raw body 解析（目前宜搭就是这么传的）
+        raw_body = (await request.body()).decode("utf-8")
+        logger.info("[Raw Body UTF-8] %s", raw_body)
 
-    raw_items = form.get("sales_list", ["[]"])[0]
+        form = parse_qs(raw_body)
+        logger.info("[Parsed Form] %s", form)
+
+        raw_items = form.get("sales_list", ["[]"])[0]
+        logger.info("[get_sales_list] from Body sales_list=%s", raw_items)
+
+    # 一般不需要，但留着不犯错
     raw_items = unquote(raw_items)
-    logger.info("[Decoded JSON String] {}", raw_items)
 
-    items = json.loads(raw_items)
-    logger.info("[Final Parsed JSON] {}", items)
+    try:
+        items = json.loads(raw_items)
+    except Exception as e:
+        logger.error("[get_sales_list] json.loads failed: %s, raw_items=%s", e, raw_items)
+        return {"ok": False, "msg": "invalid sales_list json"}
 
-    # Pydantic 校验并转换为 SalesItem 对象列表
-    sl = SalesList(sales_items=items)
+    logger.info("[Final Parsed JSON] %s", items)
 
-    # ✅ 关键：传的是 List[SalesItem]，不是模型本身
-    records = build_cost_records_from_sales(sl.sales_items)
-    if not records:
-        logger.warning("[handle_sales_to_cost] 没有生成任何成本记录，payload=%s", sl.model_dump())
-        return
+    try:
+        sl = SalesList(sales_items=items)
+    except Exception as e:
+        logger.error("[get_sales_list] SalesList validation failed: %s", e)
+        return {"ok": False, "msg": "invalid sales_items schema"}
 
-    insert_cost_record(records)
+    # 逐条处理
+    for item in sl.sales_items:
+        process_sales_item(item)
+
+    return {"ok": True, "count": len(sl.sales_items)}
 
 # 方便直接 python app.py 跑，不一定非要用命令行
 if __name__ == "__main__":
