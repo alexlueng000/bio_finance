@@ -106,7 +106,8 @@ def update_inventory_row(inv_id: str, used_qty: Decimal, remain_qty: Decimal, st
         logger.error("[update_inventory_row] failed: {}", e)
         raise
 
-def new_cost_record(date, product_name, batch_no, customer, invoice_type, invoice_no, qty, sales_order_no, status):
+
+def new_cost_record(date, product_name, product_code, batch_no, customer, invoice_type, invoice_no, qty, sales_order_no, status):
 
     data = {
         "dateField_mh8x8uxc": date, # 开票日期
@@ -118,6 +119,7 @@ def new_cost_record(date, product_name, batch_no, customer, invoice_type, invoic
         "textField_mh8x8uxa": qty, # 数量
         "textField_mh8x8uxb": sales_order_no, # 销售订单号
         "textField_mh8x8uxk": status, # 状态
+        "textField_mhd56jjz": product_code # 产品编号
     }
 
     return data
@@ -292,6 +294,7 @@ def process_sales_item(item: SalesItem) -> None:
                 qty=str(cost_qty),
                 sales_order_no=sales_order_no,
                 status="已收票",   # 按产品明细生成结转成本记录
+                product_code=product_code,
             )
         )
 
@@ -308,6 +311,7 @@ def process_sales_item(item: SalesItem) -> None:
                 qty=str(estimate_qty),
                 sales_order_no=sales_order_no,
                 status="暂估",       # 按产品明细生成暂估记录
+                product_code=product_code
             )
         )
 

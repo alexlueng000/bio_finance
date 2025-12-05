@@ -1,13 +1,20 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from decimal import Decimal
 from datetime import datetime
 from loguru import logger
+import json
+import requests
 
 from schemas import PurchaseItem
 
+from config import input_invoice_inventory_table, cost_carry_forward_table
+from config import UPDATE_INSTANCE_URL, SEARCH_REQUEST_URL, INSERT_INSTANCE_URL
+from yida_client import get_dingtalk_access_token
+
+from utils import new_cost_record, insert_cost_record
+
 
 # === 成本结转底表：查询 / 更新 / 删除 ===
-
 def query_estimate_records(product_code: str) -> List[Dict[str, Any]]:
     """
     查【成本结转底表】中：
@@ -15,39 +22,233 @@ def query_estimate_records(product_code: str) -> List[Dict[str, Any]]:
       - status = 暂估
     要求：按销项票日期升序（FIFO）返回。
     """
-    raise NotImplementedError
+    record_search_conditions = {
+        "textField_mhd56jjz": product_code,
+        "textField_mh8x8uxk": "暂估"
+    }
+
+    access_token = get_dingtalk_access_token()
+    
+    headers = {
+        "x-acs-dingtalk-access-token": access_token,
+        "Content-Type": "application/json"
+    }
+
+    print(record_search_conditions)
+
+    body = {
+        "appType": "APP_JSXMR8UNH0GRZUNHO3Y2",             # 固定为 APP（宜搭应用）
+        "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",  # 宜搭 System Token
+        "formUuid": cost_carry_forward_table,
+        # "pageSize": 20,
+        # "pageNumber": 1,
+        "dataCreateFrom": 0,          # 可选：0=全部；1=我创建；2=我参与
+        "userId": "203729096926868966",           # 这里换成有权限访问该宜搭应用/表单的用户
+        # 搜索条件
+        "searchFieldJson": json.dumps(record_search_conditions, ensure_ascii=False),
+     }
+
+    try:
+        resp = requests.post(SEARCH_REQUEST_URL, headers=headers, data=json.dumps(body))
+        # resp.raise_for_status()
+        data = resp.json()
+        print(data)
+        return data
+
+    except requests.HTTPError as e:
+        print(f"❌ HTTP错误：{e}，响应：{getattr(e.response, 'text', '')}")
+    except Exception as e:
+        print(f"❌ 请求失败：{e}")
 
 
 def update_cost_record(cost_id: str, data: Dict[str, Any]) -> None:
-    """更新一条成本结转记录"""
-    raise NotImplementedError
+    """
+    将成本结转底表中指定记录从“暂估”更新为“结转成本/已收票”。
+    支持同步修改数量、金额等字段。
+    用于进项到票后对原暂估记录进行状态回写。
+    """
+    access_token = get_dingtalk_access_token()
+    headers = {
+        "x-acs-dingtalk-access-token": access_token,
+        "Content-Type": "application/json",
+    }
+
+    # 只更新你关心的几个字段即可，其他字段宜搭会按原有数据保留
+    form_data = {
+        "textField_mh8x8uxk": "已收票",
+        "dateField_mh8x8uxt": data["进项票-开票日期"],
+        "textField_mh8x8uxr": data["关联进项票发票号"],
+        "textField_mh8x8uxs": data["采购订单号"],
+    }
+
+    body = {
+        "appType": "APP_JSXMR8UNH0GRZUNHO3Y2",
+        "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",
+        "formUuid": cost_carry_forward_table,
+        "formInstanceId": cost_id,
+        # "targetTenantId": YIDA_TENANT_ID,     # 如果你现在没这个值，可以先去掉这一行试；报错再补
+        "userId": "203729096926868966",
+        "updateFormDataJson": json.dumps(form_data, ensure_ascii=False),
+    }
+
+    logger.info(
+        "[update_cost_record更新成本结转底表] cost_id={}, body={}",
+        cost_id, body,
+    )
+
+    try:
+        resp = requests.put(UPDATE_INSTANCE_URL, headers=headers, data=json.dumps(body))
+        resp.raise_for_status()
+        data = resp.json()
+        logger.info("[update_cost_record更新成本结转底表] success, resp={}", data)
+    except requests.exceptions.HTTPError as e:
+        # 打印一下钉钉返回的错误 body，方便你调字段名
+        logger.error("[update_cost_record更新成本结转底表] HTTPError: {}, body={}", e, getattr(e.response, "text", ""))
+        raise
+    except Exception as e:
+        logger.error("[update_cost_record更新成本结转底表] failed: {}", e)
+        raise
+
+# 新建进项票库存数据
+def new_inventory_record(
+    *,
+    product_code: str,
+    product_name: str,
+    invoice_qty: Decimal,          # 发票-产品数量
+    unit_price: Optional[Decimal], # 采购单价，可为空
+    invoice_no: str,               # 发票号码
+    invoice_date_ms: int,          # 进项开票日期（毫秒时间戳）
+    spec: str,                     # 产品规格
+    category: str,                 # 产品分类
+    unit: str,                     # 单位
+    origin_link: str = "",         # 原流程链接（选填）
+    status: str = "未使用",        # 初始状态：未使用 / 部分使用 / 已用完
+) -> Dict[str, Any]:
+    """
+    构造一条【进项票库存】记录，字段名对照宜搭表单配置。
+    """
+
+    def _dec(v: Optional[Decimal]) -> str:
+        if v is None:
+            return ""
+        return str(v)
+
+    qty_str = _dec(invoice_qty)
+
+    return {
+        # 数量相关
+        "numberField_mhlqrhys": qty_str,          # 剩余可用数量 = 初始全部可用
+        "numberField_mhlqrhyt": "0",             # 已结转数量 = 0
+        "numberField_mhlqrhyu": qty_str,         # 发票-产品数量 = 发票数量
+
+        # 元数据
+        "textField_mhlqrhyo": origin_link,       # 原流程链接
+        "radioField_mhlqrhyv": status,           # 状态
+
+        # 发票信息
+        "textField_mhlqhrz3": invoice_no,        # 发票号码
+        "dateField_mhlqhrz2": invoice_date_ms,   # 进项开票日期（毫秒）
+
+        # 产品信息
+        "textField_mhlqhrhyx": product_name,     # 产品名称
+        "textField_mhlqrhyy": product_code,      # 产品编号
+        "numberField_mhlqhrz1": _dec(unit_price),# 采购单价
+        "textField_mhlqhrz4": spec,              # 产品规格
+        "textField_mhlqhrz5": category,          # 产品分类
+        "textField_mhlqhrz6": unit,              # 单位
+    }
 
 
-def delete_cost_record(cost_id: str) -> None:
-    """删除一条成本结转记录"""
-    raise NotImplementedError
+def insert_inventory_record(record: Dict[str, Any]) -> None:
+    """
+    将一条【进项票库存】记录写入宜搭。
+    """
+    access_token = get_dingtalk_access_token()
+    headers = {
+        "x-acs-dingtalk-access-token": access_token,
+        "Content-Type": "application/json",
+    }
+
+    body = {
+        "appType": "APP_JSXMR8UNH0GRZUNHO3Y2",
+        "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",
+        "formUuid": input_invoice_inventory_table,
+        "userId": "203729096926868966",
+        "formDataJson": json.dumps(record, ensure_ascii=False),
+    }
+
+    logger.info("[insert_inventory_record] request body=%s", body)
+
+    resp = requests.post(INSERT_INSTANCE_URL, headers=headers, data=json.dumps(body))
+    text = resp.text
+    logger.info(
+        "[insert_inventory_record] http_status=%s, raw_body=%s",
+        resp.status_code,
+        text,
+    )
+
+    try:
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        try:
+            err_json = resp.json()
+        except Exception:
+            err_json = None
+        logger.error(
+            "[insert_inventory_record] HTTPError status=%s, body_text=%s, body_json=%s",
+            resp.status_code,
+            text,
+            err_json,
+        )
+        raise
 
 
-# 你已经有的：插入成本结转记录
-def insert_cost_record(data: Dict[str, Any]) -> None:
-    raise NotImplementedError
+def _append_inventory_by_new_record(
+    product_code: str,
+    qty: Decimal,
+    invoice_info: Dict[str, Any],
+) -> None:
+    """
+    用 new_inventory_record 构造库存记录并写入【进项票库存】。
+    要求 invoice_info 至少包含：
+      - product_name
+      - unit_price
+      - invoice_no
+      - invoice_date_ms
+      - spec
+      - category
+      - unit
+    """
 
+    if qty <= 0:
+        return
 
-# === 进项票库存 ===
-def insert_inventory_record(data: Dict[str, Any]) -> None:
-    """在【进项票库存】新增一条库存记录"""
-    raise NotImplementedError
+    try:
+        record = new_inventory_record(
+            product_code=product_code,
+            product_name=invoice_info["product_name"],
+            invoice_qty=qty,
+            unit_price=invoice_info.get("unit_price"),
+            invoice_no=invoice_info["invoice_no"],
+            invoice_date_ms=invoice_info["invoice_date_ms"],
+            spec=invoice_info.get("spec", ""),
+            category=invoice_info.get("category", ""),
+            unit=invoice_info.get("unit", ""),
+            origin_link=invoice_info.get("origin_link", ""),
+            status="未使用",
+        )
+    except KeyError as e:
+        logger.error(
+            "[_append_inventory_by_new_record新增进项票录入数据] missing key in invoice_info: %s, invoice_info=%s",
+            e, invoice_info,
+        )
+        return
 
-
-# === 发票统计（进项/销项通用） ===
-def insert_invoice_stat(data: Dict[str, Any]) -> None:
-    raise NotImplementedError
-
-
-# === 产品主数据：进项累计 ===
-def inc_product_input_qty(product_code: str, delta_qty: Decimal) -> None:
-    """产品主数据中 '进项票总数量' += delta_qty"""
-    raise NotImplementedError
+    logger.info(
+        "[_append_inventory_by_new_record新增进项票录入数据] product_code=%s, qty=%s, record=%s",
+        product_code, qty, record,
+    )
+    insert_inventory_record(record)
 
 
 def offset_estimates_for_product(
@@ -56,78 +257,169 @@ def offset_estimates_for_product(
     invoice_info: Dict[str, Any],
 ) -> Decimal:
     """
-    用本次进项票数量冲销【成本结转底表】中该产品的“暂估”记录。
-    规则：
-      - 按销项票日期正序（FIFO）
-      - 若 进项数量 >= 暂估数量：原暂估记录状态改为“结转成本”，数量不变
-      - 若 进项数量 <  暂估数量：拆成两条：结转成本(=进项数量) + 暂估(=原数量-进项数量)
-    invoice_info 会写入所有被更新/新建的“结转成本”记录里，用于回填 J~N 字段（进项票号、供应商等）。
+    用本次进项票数量冲销【成本结转底表】中该产品的“暂估”记录，
+    并将剩余数量追加到【进项票库存】。
 
-    返回值：本次进项票中，实际用于“结转成本”的数量（用于后面算剩余入库存量）。
+    返回值：本次进项中实际用于冲销暂估的数量。
     """
 
-    remain = qty_input
-    used_total = Decimal("0")
-
-    estimates = query_estimate_records(product_code=product_code) or []
-    logger.info(
-        "Offset estimates: product_code={}, qty_input={}, estimate_rows={}",
-        product_code, qty_input, len(estimates)
-    )
-
-    if not estimates:
-        # 没有任何暂估记录 → 不冲销，全部入库存
+    remaining = Decimal(qty_input or 0)
+    if remaining <= 0:
+        logger.info(
+            "[offset_estimates_for_product] qty_input<=0, skip. product_code=%s, qty_input=%s",
+            product_code, qty_input,
+        )
         return Decimal("0")
 
-    for est in estimates:
-        if remain <= 0:
+    # 1. 查询该产品的所有“暂估”记录
+    raw = query_estimate_records(product_code)
+    if not raw:
+        logger.info(
+            "[offset_estimates_for_product] no estimate records, product_code=%s",
+            product_code,
+        )
+        # 没有暂估，后面直接把全部数量入库存
+        remain_for_inventory = remaining
+        if remain_for_inventory > 0:
+            _append_inventory_by_new_record(product_code, remain_for_inventory, invoice_info)
+        return Decimal("0")
+
+    # 解析宜搭返回结构
+    records: List[Dict[str, Any]] = []
+    if isinstance(raw, dict):
+        if isinstance(raw.get("data"), list):
+            records = raw["data"]
+        elif isinstance(raw.get("result"), dict) and isinstance(raw["result"].get("data"), list):
+            records = raw["result"]["data"]
+        elif isinstance(raw.get("result"), dict) and isinstance(raw["result"].get("list"), list):
+            records = raw["result"]["list"]
+        elif isinstance(raw.get("body"), list):
+            records = raw["body"]
+    elif isinstance(raw, list):
+        records = raw
+
+    if not records:
+        logger.info(
+            "[offset_estimates_for_product] estimate list empty after extraction, raw=%s",
+            raw,
+        )
+        remain_for_inventory = remaining
+        if remain_for_inventory > 0:
+            _append_inventory_by_new_record(product_code, remain_for_inventory, invoice_info)
+        return Decimal("0")
+
+    # 2. 按销项票日期 FIFO
+    def _get_sales_date(rec: Dict[str, Any]) -> int:
+        v = rec.get("dateField_mh8x8uxc")
+        try:
+            return int(v)
+        except Exception:
+            return 0
+
+    records_sorted = sorted(records, key=_get_sales_date)
+
+    used_total = Decimal("0")
+    logger.info(
+        "[offset_estimates_for_product] start offset, product_code=%s, qty_input=%s, estimate_records=%d",
+        product_code, qty_input, len(records_sorted),
+    )
+
+    for rec in records_sorted:
+        if remaining <= 0:
             break
 
-        est_id = est["id"]
-        est_qty = Decimal(str(est["qty"]))  # 你成本结转表里数量字段的 code，先用 qty 做占位
-        est_status = est.get("record_type") or est.get("status", "")
+        cost_id = rec.get("formInstanceId") or rec.get("id")
+        if not cost_id:
+            logger.warning("[offset_estimates_for_product] record without id: %s", rec)
+            continue
 
-        if est_status not in ("暂估", "Estimate"):
-            continue  # 安全起见，只处理暂估
+        try:
+            est_qty = Decimal(str(rec.get("textField_mh8x8uxa") or "0"))
+        except Exception:
+            logger.error("[offset_estimates_for_product] invalid est qty for record=%s", rec)
+            continue
 
-        if remain >= est_qty:
-            # 情况①：进项 >= 暂估 → 整条转为结转成本
-            new_data = est.copy()
-            new_data.update(invoice_info)
-            new_data["record_type"] = "结转成本"  # 或你实际用的字段名
-            # 数量不变
-            update_cost_record(est_id, new_data)
+        if est_qty <= 0:
+            continue
 
-            used_total += est_qty
-            remain -= est_qty
+        sales_date = rec.get("dateField_mh8x8uxc")
+        product_name = rec.get("textField_mh8x8uwz", "")
+        batch_no = rec.get("textField_mh8x8ux0", "")
+        customer = rec.get("textField_mh8x8ux1", "")
+        invoice_type = rec.get("textField_mh8x8ux8", "")
+        sales_invoice_no = rec.get("textField_mh8x8ux9", "")
+        sales_order_no = rec.get("textField_mh8x8uxb", "")
+
+        logger.info(
+            "[offset_estimates_for_product] record id=%s, est_qty=%s, remaining=%s",
+            cost_id, est_qty, remaining,
+        )
+
+        # 情况①：进项数量 >= 暂估数量 → 原记录改为“已收票”
+        if remaining >= est_qty:
+            used_here = est_qty
+            remaining -= used_here
+            used_total += used_here
+
+            update_data = dict(invoice_info or {})
+            update_data["textField_mh8x8uxk"] = "已收票"
+
+            logger.info(
+                "[offset_estimates_for_product] full offset: cost_id=%s, used=%s, remaining=%s",
+                cost_id, used_here, remaining,
+            )
+            update_cost_record(cost_id, update_data)
 
         else:
-            # 情况②：进项 < 暂估 → 拆分为 结转成本 + 暂估
-            # 先删掉原记录
-            delete_cost_record(est_id)
+            # 情况②：进项数量 < 暂估数量 → 拆分
+            used_here = remaining
+            remaining = Decimal("0")
+            used_total += used_here
 
-            # 结转成本部分
-            cost_part = est.copy()
-            cost_part.update(invoice_info)
-            cost_part["record_type"] = "结转成本"
-            cost_part["qty"] = str(remain)
-            insert_cost_record(cost_part)
+            remain_est = est_qty - used_here
 
-            # 剩余暂估部分
-            left_part = est.copy()
-            left_part["record_type"] = "暂估"
-            left_part["qty"] = str(est_qty - remain)
-            # 暂估部分一般不回填进项票信息，你可以按需要决定要不要带 invoice_info
-            insert_cost_record(left_part)
+            # ②-a 原记录改为剩余暂估
+            update_data_est = {
+                "textField_mh8x8uxa": str(remain_est),
+                "textField_mh8x8uxk": "暂估",
+            }
+            logger.info(
+                "[offset_estimates_for_product] partial offset: cost_id=%s, used=%s, remain_est=%s",
+                cost_id, used_here, remain_est,
+            )
+            update_cost_record(cost_id, update_data_est)
 
-            used_total += remain
-            remain = Decimal("0")
-            break
+            # ②-b 新增一条“已收票”记录
+            new_data = new_cost_record(
+                date=sales_date,
+                product_name=product_name,
+                batch_no=batch_no,
+                customer=customer,
+                invoice_type=invoice_type,
+                invoice_no=sales_invoice_no,
+                qty=str(used_here),
+                sales_order_no=sales_order_no,
+                status="已收票",
+            )
+            new_data.update(invoice_info or {})
+
+            logger.info(
+                "[offset_estimates_for_product] create new cost_record for used part: %s",
+                new_data,
+            )
+            insert_cost_record([new_data])
+            break  # 进项数量已经用完
+
+    # 3. 剩余数量入【进项票库存】
+    remain_for_inventory = qty_input - used_total
+    if remain_for_inventory > 0:
+        _append_inventory_by_new_record(product_code, remain_for_inventory, invoice_info)
 
     logger.info(
-        "Offset estimates done: product_code={}, used_total={}, remain_for_stock={}",
-        product_code, used_total, qty_input - used_total
+        "[offset_estimates_for_product] finish: product_code=%s, qty_input=%s, used_total=%s, remain_for_inventory=%s",
+        product_code, qty_input, used_total, remain_for_inventory,
     )
+
     return used_total
 
 
@@ -136,95 +428,54 @@ def process_purchase_item(
     *,
     invoice_no: str,
     invoice_date: datetime,
-    has_related_sales: bool,
-    supplier_name: Optional[str] = None,
 ) -> None:
     """
     单条进项票产品明细处理逻辑：
       1）写【发票统计】（进项）
       2）更新【产品主数据】进项票总数量
-      3）若 has_related_sales = False → 全量入【进项票库存】
-      4）若 has_related_sales = True →
-           a. 用本次数量冲销/拆分【成本结转底表】中的“暂估”
-           b. 剩余数量（若有）一次性追加到【进项票库存】
+      3）调用 offset_estimates_for_product：
+           - 若该产品有“暂估”记录 → 冲销/拆分 + 剩余数量入【进项票库存】
+           - 若该产品没有“暂估”记录 → 本次进项数量全量入【进项票库存】
     """
 
-    product_code = item.textField_mi8pp1wf   # 产品编号
-    product_name = item.textField_mi8pp1we   # 产品名称
+    product_code = item.textField_mi8pp1wf          # 产品编号
+    product_name = item.textField_mi8pp1we          # 产品名称
     qty_input: Decimal = item.numberField_mi8pp1wg  # 本次进项数量
     unit_price: Decimal = item.numberField_mi8pp1wh or Decimal("0")
 
+    # 这些字段按你 PurchaseItem 的实际字段名改
+    spec = getattr(item, "textField_spec", "")          # 规格
+    category = getattr(item, "textField_category", "")  # 分类
+    unit = getattr(item, "textField_unit", "")          # 单位
+
+    invoice_date_ms = int(invoice_date.timestamp() * 1000)
+
     logger.info(
-        "Process purchase item: product_code={}, name={}, qty_input={}, has_related_sales={}",
-        product_code, product_name, qty_input, has_related_sales
+        "Process purchase item: product_code=%s, name=%s, qty_input=%s",
+        product_code, product_name, qty_input
     )
 
-    # ==== 1. 发票统计（进项） ====
-    insert_invoice_stat({
-        "invoice_no": invoice_no,
-        "invoice_date": invoice_date.isoformat(),
-        "invoice_type": "进项",
-        "supplier_name": supplier_name,
-        "product_code": product_code,
+    # 2. 构造进项信息，交给 offset_estimates_for_product 使用
+    invoice_info = {
         "product_name": product_name,
-        "qty": str(qty_input),
-        "unit_price": str(unit_price),
-        "amount": str(qty_input * unit_price),
-    })
-
-    # ==== 2. 产品主数据：进项票总数量累加 ====
-    inc_product_input_qty(product_code, qty_input)
-
-    # ==== 3. 如果没有对应销项（未申请销项票） → 全量入库存 ====
-    if not has_related_sales:
-        logger.info(
-            "No related sales for product_code={}, qty={} → 全部入进项库存",
-            product_code, qty_input
-        )
-        insert_inventory_record({
-            "product_code": product_code,
-            "product_name": product_name,
-            "invoice_no_in": invoice_no,
-            "invoice_date_in": invoice_date.isoformat(),
-            "orig_qty": str(qty_input),
-            "used_qty": "0",
-            "remain_qty": str(qty_input),
-            "status": "未使用",
-            # 你库存表还有什么字段，在这里一起补
-        })
-        return
-
-    # ==== 4. 已有销项 → 先冲销暂估，再把剩余数量入库存 ====
-    invoice_info_for_cost = {
-        # 用于回填成本结转表 J~N 字段的进项信息：
-        # 这些 key 要换成你成本结转底表的字段 code
-        "input_invoice_no": invoice_no,
-        "input_invoice_date": invoice_date.isoformat(),
-        "supplier_name": supplier_name,
+        "unit_price": unit_price,
+        "invoice_no": invoice_no,
+        "invoice_date_ms": invoice_date_ms,
+        "spec": spec,
+        "category": category,
+        "unit": unit,
+        "origin_link": "",  # 有原流程链接就塞这里
+        # 需要写入成本结转 / 库存表的其它字段也可以继续补
+        # "supplier_name": supplier_name,
     }
 
     used_for_cost = offset_estimates_for_product(
         product_code=product_code,
         qty_input=qty_input,
-        invoice_info=invoice_info_for_cost,
+        invoice_info=invoice_info,
     )
-
-    remain_for_stock = qty_input - used_for_cost
 
     logger.info(
-        "Purchase item result: product_code={}, qty_input={}, used_for_cost={}, remain_for_stock={}",
-        product_code, qty_input, used_for_cost, remain_for_stock
+        "Purchase item result: product_code=%s, qty_input=%s, used_for_cost=%s, remain_for_stock=%s",
+        product_code, qty_input, used_for_cost, qty_input - used_for_cost
     )
-
-    # 剩余数量（可能是 0）入进项库存
-    if remain_for_stock > 0:
-        insert_inventory_record({
-            "product_code": product_code,
-            "product_name": product_name,
-            "invoice_no_in": invoice_no,
-            "invoice_date_in": invoice_date.isoformat(),
-            "orig_qty": str(remain_for_stock),
-            "used_qty": "0",
-            "remain_qty": str(remain_for_stock),
-            "status": "未使用",
-        })

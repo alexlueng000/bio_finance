@@ -14,9 +14,8 @@ from yida_client import get_dingtalk_access_token
 
 from schemas import PurchaseList, SalesList
 
-from output_invoice import process_sales_item, build_cost_records_from_sales, insert_cost_record
-
-
+from output_invoice import process_sales_item
+from input_invoice import process_purchase_item
 
 
 # 加载 .env 里的配置（可选）
@@ -47,53 +46,8 @@ def test_token():
     token = get_dingtalk_access_token()
     return {"token": token}
 
-@app.post("/yida/invoice-input-callback")
-async def invoice_input_callback(request: Request):
-    """
-    进项票录入审批通过后，宜搭调用的回调入口。
-    后面所有业务逻辑都从这里发散。
-    """
-    # 1. 简单鉴权（可选，但强烈建议上线前必须开）
-    if WEBHOOK_TOKEN:
-        token = request.headers.get("X-Webhook-Token")
-        if token != WEBHOOK_TOKEN:
-            logger.warning(f"无效的 Webhook Token: {token}")
-            raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # 2. 解析请求体
-    try:
-        payload: Dict[str, Any] = await request.json()
-    except Exception as e:
-        logger.exception("解析 JSON 失败")
-        raise HTTPException(status_code=400, detail="Invalid JSON") from e
-
-    # 3. 打日志，先看清宜搭到底给你什么
-    logger.info("收到宜搭回调: {}", payload)
-
-    # 理论上这里你会有 bizObjectId / formUuid / spaceId 等
-    # 先从 payload 里抢这几个字段，如果没有就记日志但不强依赖
-    biz_object_id = payload.get("bizObjectId") or payload.get("bizObjectID")
-    form_uuid = payload.get("formUuid")
-    space_id = payload.get("spaceId")
-
-    logger.info(
-        "解析到关键字段 bizObjectId={}, formUuid={}, spaceId={}",
-        biz_object_id,
-        form_uuid,
-        space_id,
-    )
-
-    # 4. TODO：这里后面会接你的业务逻辑
-    #    比如：
-    #    from logic_invoice import process_invoice_input
-    #    process_invoice_input(biz_object_id=biz_object_id, form_uuid=form_uuid, raw_payload=payload)
-    #
-    # 现在先啥都不做，只是回 success，让宜搭那边流程能走完。
-
-    return JSONResponse({"success": True, "msg": "callback received"})
-
-
-# 进项票录入接口
+# 进项票录入接口（进项管理申请）
 @app.post("/get_purchase_list")
 async def get_purchase_list(request: Request):
     raw_body = (await request.body()).decode("utf-8")
@@ -121,6 +75,9 @@ async def get_purchase_list(request: Request):
     # 用你原来的模型校验
     pl = PurchaseList(purchase_items=items)
 
+    for item in pl.purchase_items:
+        process_purchase_item(item)
+
     return {
         "count": len(pl.purchase_items),
         "items": pl.purchase_items,
@@ -143,7 +100,7 @@ async def get_sales_list(
     # 1. 优先走 Form（Swagger / 正常表单）
     if sales_list is not None:
         raw_items = sales_list
-        logger.info("[get_sales_list] from Form sales_list=%s", raw_items)
+        logger.info("[get_sales_list开票管理申请] from Form sales_list=%s", raw_items)
     else:
         # 2. 兜底：老的 raw body 解析（目前宜搭就是这么传的）
         raw_body = (await request.body()).decode("utf-8")
@@ -153,7 +110,7 @@ async def get_sales_list(
         logger.info("[Parsed Form] %s", form)
 
         raw_items = form.get("sales_list", ["[]"])[0]
-        logger.info("[get_sales_list] from Body sales_list=%s", raw_items)
+        logger.info("[get_sales_list开票管理申请] from Body sales_list=%s", raw_items)
 
     # 一般不需要，但留着不犯错
     raw_items = unquote(raw_items)
@@ -161,7 +118,7 @@ async def get_sales_list(
     try:
         items = json.loads(raw_items)
     except Exception as e:
-        logger.error("[get_sales_list] json.loads failed: %s, raw_items=%s", e, raw_items)
+        logger.error("[get_sales_list开票管理申请] json.loads failed: %s, raw_items=%s", e, raw_items)
         return {"ok": False, "msg": "invalid sales_list json"}
 
     logger.info("[Final Parsed JSON] %s", items)
@@ -169,7 +126,7 @@ async def get_sales_list(
     try:
         sl = SalesList(sales_items=items)
     except Exception as e:
-        logger.error("[get_sales_list] SalesList validation failed: %s", e)
+        logger.error("[get_sales_list开票管理申请] SalesList validation failed: %s", e)
         return {"ok": False, "msg": "invalid sales_items schema"}
 
     # 逐条处理
