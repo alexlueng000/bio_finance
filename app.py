@@ -2,6 +2,7 @@
 import os
 import json
 from typing import Dict, Any, Optional
+from datetime import datetime
 
 from urllib.parse import parse_qs, unquote
 
@@ -50,40 +51,64 @@ def test_token():
 # 进项票录入接口（进项管理申请）
 @app.post("/get_purchase_list")
 async def get_purchase_list(request: Request):
+    # ① 原始 body（URL 编码 + 字符串）
     raw_body = (await request.body()).decode("utf-8")
-    logger.info("[Raw Body UTF-8] {}", raw_body)
+    logger.warning("【① Raw Body 原始内容】\n{}", raw_body)
 
-    # ⬇⬇⬇ 关键：解析表单格式 ⬇⬇⬇
+    # ② 解析 URL form
     form = parse_qs(raw_body)
-    # form 结构变成：
-    # { "purchase_items": ["[{...},{...}]" ] }
+    logger.warning("【② Parsed Form 解析后】\n{}", form)
 
-    logger.info("[Parsed Form] {}", form)
-
-    # 取出 purchase_items 字符串
     raw_items = form.get("purchase_items", ["[]"])[0]
 
-    # URL decode 一下
+    # ③ URL decode 后的 JSON 字符串
     raw_items = unquote(raw_items)
+    logger.warning("【③ Decoded JSON String 解码后 JSON 字符串】\n{}", raw_items)
 
-    logger.info("[Decoded JSON String] {}", raw_items)
+    # ④ JSON 解析为 Python 列表
+    items = json.loads(raw_items)
+    logger.warning("【④ Python Parsed JSON 解析后的列表】\n{}", items)
 
-    # 最后解析 JSON 数组
-    items = json.loads(raw_items)    
-    logger.info("[Final Parsed JSON] {}", items)
-
-    # 用你原来的模型校验
+    # ⑤ Pydantic 校验
     pl = PurchaseList(purchase_items=items)
 
+    logger.warning("【⑤ Pydantic Model Parsed Items】")
+    for i, item in enumerate(pl.purchase_items):
+        logger.warning("Item #{}: {}", i, item.model_dump())
+
+    # =============================
+    # 🔥 真正执行业务逻辑
+    # =============================
+
     for item in pl.purchase_items:
-        process_purchase_item(item)
+
+        # --- 从明细行取发票号 ---
+        invoice_no = item.textField_miu32cdl or ""
+
+        # --- 日期从毫秒转 datetime ---
+        if item.dateField_miu32cdo:
+            invoice_date = datetime.fromtimestamp(item.dateField_miu32cdo / 1000)
+        else:
+            invoice_date = datetime.now()
+
+        logger.warning(
+            "【执行 process_purchase_item】：product_code={}, qty={}, invoice_no={}, invoice_date={}",
+            item.textField_mi8pp1wf,
+            item.numberField_mi8pp1wg,
+            invoice_no,
+            invoice_date,
+        )
+
+        process_purchase_item(
+            item,
+            invoice_no=invoice_no,
+            invoice_date=invoice_date,
+        )
 
     return {
+        "message": "进项票处理完成",
         "count": len(pl.purchase_items),
-        "items": pl.purchase_items,
     }
-
-
 
 # 销项票录入接口（开票管理申请）
 @app.post("/get_sales_list")
