@@ -7,8 +7,6 @@ from decimal import Decimal
 
 # 进项票-产品明细
 class PurchaseItem(BaseModel):
-    # “选择产品” —— 这里通常是一个引用产品表的 ID
-    # product_id: str
     # “产品名称*”
     textField_mi8pp1we: str
     # “产品编号*”
@@ -24,18 +22,25 @@ class PurchaseItem(BaseModel):
     # “单位*”
     textField_mi8pp1wk: str
 
-    # “采购订单号”
-    textField_miu32cdn: str
-    # “采购发票号”
-    textField_miu32cdl: str
-    # “采购开票日期”
-    dateField_miu32cdo: int
+    # “采购订单号” —— 可以为空
+    textField_miu32cdn: Optional[str] = None
+    # “采购发票号” —— 可以为空
+    textField_miu32cdl: Optional[str] = None
+    # “采购开票日期” —— 宜搭没填就不给，你就不能强制 int
+    dateField_miu32cdo: Optional[int] = None
 
     class Config:
-        extra = "allow"  # 允许宜搭传入的额外字段不报错
+        extra = "allow"
 
     @field_validator("numberField_mi8pp1wh", mode="before")
-    def empty_to_none(cls, v):
+    def empty_price_to_none(cls, v):
+        if v in ("", None):
+            return None
+        return v
+
+    @field_validator("dateField_miu32cdo", mode="before")
+    def empty_date_to_none(cls, v):
+        # 宜搭如果传 "" 或 null，统一变成 None
         if v in ("", None):
             return None
         return v
