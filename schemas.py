@@ -24,6 +24,13 @@ class PurchaseItem(BaseModel):
     # “单位*”
     textField_mi8pp1wk: str
 
+    # “采购订单号”
+    textField_miu32cdn: str
+    # “采购发票号”
+    textField_miu32cdl: str
+    # “采购开票日期”
+    dateField_miu32cdo: int
+
     class Config:
         extra = "allow"  # 允许宜搭传入的额外字段不报错
 
