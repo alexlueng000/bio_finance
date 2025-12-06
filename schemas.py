@@ -27,6 +27,12 @@ class PurchaseItem(BaseModel):
     class Config:
         extra = "allow"  # 允许宜搭传入的额外字段不报错
 
+    @field_validator("numberField_mi8pp1wh", mode="before")
+    def empty_to_none(cls, v):
+        if v in ("", None):
+            return None
+        return v
+
 
 class PurchaseList(BaseModel):
     purchase_items: List[PurchaseItem]
