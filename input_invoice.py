@@ -431,42 +431,50 @@ def process_purchase_item(
 ) -> None:
     """
     单条进项票产品明细处理逻辑：
-      1）写【发票统计】（进项）
-      2）更新【产品主数据】进项票总数量
-      3）调用 offset_estimates_for_product：
-           - 若该产品有“暂估”记录 → 冲销/拆分 + 剩余数量入【进项票库存】
-           - 若该产品没有“暂估”记录 → 本次进项数量全量入【进项票库存】
+      调用 offset_estimates_for_product：
+        - 若该产品有“暂估”记录 → 冲销/拆分 + 剩余数量入【进项票库存】
+        - 若该产品没有“暂估”记录 → 本次进项数量全量入【进项票库存】
     """
 
+    # ===== 基础字段（按照你当前的 PurchaseItem 定义） =====
     product_code = item.textField_mi8pp1wf          # 产品编号
     product_name = item.textField_mi8pp1we          # 产品名称
     qty_input: Decimal = item.numberField_mi8pp1wg  # 本次进项数量
     unit_price: Decimal = item.numberField_mi8pp1wh or Decimal("0")
 
-    # 这些字段按你 PurchaseItem 的实际字段名改
-    spec = getattr(item, "textField_spec", "")          # 规格
-    category = getattr(item, "textField_category", "")  # 分类
-    unit = getattr(item, "textField_unit", "")          # 单位
+    # 产品属性
+    spec = item.textField_mi8pp1wi                  # 产品规格
+    category = item.textField_mi8pp1wj              # 产品分类
+    unit = item.textField_mi8pp1wk                  # 单位
 
-    invoice_date_ms = int(invoice_date.timestamp() * 1000)
+    # 采购单维度信息（每条明细自带）
+    po_no = item.textField_miu32cdn                 # 采购订单号
+    purchase_invoice_no = item.textField_miu32cdl   # 采购发票号
+    purchase_invoice_date_ms = item.dateField_miu32cdo  # 采购开票日期（毫秒时间戳）
 
-    logger.info(
-        "Process purchase item: product_code=%s, name=%s, qty_input=%s",
-        product_code, product_name, qty_input
+    # 兼容：如果行里没带发票信息，就退回到函数入参
+    effective_invoice_no = purchase_invoice_no or invoice_no
+    effective_invoice_date_ms = purchase_invoice_date_ms or int(
+        invoice_date.timestamp() * 1000
     )
 
-    # 2. 构造进项信息，交给 offset_estimates_for_product 使用
-    invoice_info = {
+    logger.info(
+        "Process purchase item: product_code=%s, name=%s, qty_input=%s, unit_price=%s, po_no=%s, invoice_no=%s",
+        product_code, product_name, qty_input, unit_price, po_no, effective_invoice_no
+    )
+
+    # ===== 构造进项信息，交给 offset_estimates_for_product 使用 =====
+    invoice_info: Dict[str, object] = {
         "product_name": product_name,
         "unit_price": unit_price,
-        "invoice_no": invoice_no,
-        "invoice_date_ms": invoice_date_ms,
+        "invoice_no": effective_invoice_no,
+        "invoice_date_ms": effective_invoice_date_ms,
         "spec": spec,
         "category": category,
         "unit": unit,
+        "purchase_order_no": po_no,
         "origin_link": "",  # 有原流程链接就塞这里
-        # 需要写入成本结转 / 库存表的其它字段也可以继续补
-        # "supplier_name": supplier_name,
+        # 你成本结转/库存表还有其他字段，就在这里继续补键值对
     }
 
     used_for_cost = offset_estimates_for_product(
