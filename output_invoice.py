@@ -17,6 +17,8 @@ from config import SEARCH_REQUEST_URL, UPDATE_INSTANCE_URL, INSERT_INSTANCE_URL
 # 根据产品编号获取进项票库存中的该产品的所有记录
 def get_inventory_for_product(product_code: str) -> List[Dict[str, Any]]:
 
+    logger.info("[get_inventory_for_product查询产品编号为{}的进项票库存]", product_code)
+
     product_search_conditions = {
         "textField_mhlqrhyy": product_code,
     }
@@ -28,7 +30,7 @@ def get_inventory_for_product(product_code: str) -> List[Dict[str, Any]]:
         "Content-Type": "application/json"
     }
 
-    print(product_search_conditions)
+    logger.info("[get_inventory_for_product查询产品编号为{}的进项票库存] product_search_conditions={}", product_code, product_search_conditions)
 
     body = {
         "appType": "APP_JSXMR8UNH0GRZUNHO3Y2",             # 固定为 APP（宜搭应用）
