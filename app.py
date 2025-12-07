@@ -129,10 +129,10 @@ async def get_sales_list(
     else:
         # 2. 兜底：老的 raw body 解析（目前宜搭就是这么传的）
         raw_body = (await request.body()).decode("utf-8")
-        logger.info("[Raw Body UTF-8] %s", raw_body)
+        # logger.info("[Raw Body UTF-8] %s", raw_body)
 
         form = parse_qs(raw_body)
-        logger.info("[Parsed Form] %s", form)
+        # logger.info("[Parsed Form] %s", form)
 
         raw_items = form.get("sales_list", ["[]"])[0]
         logger.info("[get_sales_list开票管理申请] from Body sales_list=%s", raw_items)
