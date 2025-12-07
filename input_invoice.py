@@ -174,7 +174,10 @@ def insert_inventory_record(record: Dict[str, Any]) -> None:
         "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",
         "formUuid": input_invoice_inventory_table,
         "userId": "203729096926868966",
-        "formDataJson": json.dumps(record, ensure_ascii=False),
+        # "formDataJson": json.dumps(record, ensure_ascii=False),
+        "formDataJsonList": [
+            json.dumps(record, ensure_ascii=False)
+        ],
     }
 
     logger.info("[insert_inventory_record] request body={}", body)
