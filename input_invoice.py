@@ -169,7 +169,7 @@ def new_inventory_record(
         # 产品分类
         "textField_mhlqrhz5": category,
         # 单位
-        "textField_mhlqrz6": unit,
+        "textField_mhlqrhz6": unit,
         # 产品编号
         "textField_mhlqrhyy": product_code,
     }
