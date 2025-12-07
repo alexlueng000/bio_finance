@@ -24,6 +24,12 @@ def new_cost_record(date, product_name, batch_no, customer, invoice_type, invoic
 
     return data
 
+def _json_default(o):
+    # 所有 Decimal → 字符串（或者 float，看你业务习惯）
+    if isinstance(o, Decimal):
+        return str(o)
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
 
 # === 成本结转底表 ===
 # 按产品明细生成一条结转成本记录
@@ -44,7 +50,8 @@ def insert_cost_record(records: List[Dict[str, Any]]) -> None:
         "userId": "203729096926868966",
         # 👇 关键：这里必须是“字符串列表”
         "formDataJsonList": [
-            json.dumps(r, ensure_ascii=False) for r in records
+            json.dumps(r, ensure_ascii=False, default=_json_default)
+            for r in records
         ],
     }
 

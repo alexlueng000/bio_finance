@@ -523,7 +523,7 @@ def process_purchase_item(
 
     invoice_info = {
         "product_name": product_name,
-        "unit_price": unit_price,
+        "unit_price": str(unit_price),
         "invoice_no": invoice_no,
         "invoice_date_ms": invoice_date_ms,
         "spec": spec,
