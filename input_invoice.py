@@ -177,12 +177,12 @@ def insert_inventory_record(record: Dict[str, Any]) -> None:
         "formDataJson": json.dumps(record, ensure_ascii=False),
     }
 
-    logger.info("[insert_inventory_record] request body=%s", body)
+    logger.info("[insert_inventory_record] request body={}", body)
 
     resp = requests.post(INSERT_INSTANCE_URL, headers=headers, data=json.dumps(body))
     text = resp.text
     logger.info(
-        "[insert_inventory_record] http_status=%s, raw_body=%s",
+        "[insert_inventory_record] http_status={}, raw_body={}",
         resp.status_code,
         text,
     )
@@ -195,7 +195,7 @@ def insert_inventory_record(record: Dict[str, Any]) -> None:
         except Exception:
             err_json = None
         logger.error(
-            "[insert_inventory_record] HTTPError status=%s, body_text=%s, body_json=%s",
+            "[insert_inventory_record] HTTPError status={}, body_text={}, body_json={}",
             resp.status_code,
             text,
             err_json,
@@ -239,13 +239,13 @@ def _append_inventory_by_new_record(
         )
     except KeyError as e:
         logger.error(
-            "[_append_inventory_by_new_record新增进项票录入数据] missing key in invoice_info: %s, invoice_info=%s",
+            "[_append_inventory_by_new_record新增进项票录入数据] missing key in invoice_info: {}, invoice_info={}",
             e, invoice_info,
         )
         return
 
     logger.info(
-        "[_append_inventory_by_new_record新增进项票录入数据] product_code=%s, qty=%s, record=%s",
+        "[_append_inventory_by_new_record新增进项票录入数据] product_code={}, qty={}, record={}",
         product_code, qty, record,
     )
     insert_inventory_record(record)
@@ -266,7 +266,7 @@ def offset_estimates_for_product(
     remaining = Decimal(qty_input or 0)
     if remaining <= 0:
         logger.info(
-            "[offset_estimates_for_product] qty_input<=0, skip. product_code=%s, qty_input=%s",
+            "[offset_estimates_for_product] qty_input<=0, skip. product_code={}, qty_input={}",
             product_code, qty_input,
         )
         return Decimal("0")
@@ -275,7 +275,7 @@ def offset_estimates_for_product(
     raw = query_estimate_records(product_code)
     if not raw:
         logger.info(
-            "[offset_estimates_for_product] no estimate records, product_code=%s",
+            "[offset_estimates_for_product] no estimate records, product_code={}",
             product_code,
         )
         # 没有暂估，后面直接把全部数量入库存
@@ -300,7 +300,7 @@ def offset_estimates_for_product(
 
     if not records:
         logger.info(
-            "[offset_estimates_for_product] estimate list empty after extraction, raw=%s",
+            "[offset_estimates_for_product] estimate list empty after extraction, raw={}",
             raw,
         )
         remain_for_inventory = remaining
@@ -320,7 +320,7 @@ def offset_estimates_for_product(
 
     used_total = Decimal("0")
     logger.info(
-        "[offset_estimates_for_product] start offset, product_code=%s, qty_input=%s, estimate_records=%d",
+        "[offset_estimates_for_product] start offset, product_code={}, qty_input={}, estimate_records=%d",
         product_code, qty_input, len(records_sorted),
     )
 
@@ -330,13 +330,13 @@ def offset_estimates_for_product(
 
         cost_id = rec.get("formInstanceId") or rec.get("id")
         if not cost_id:
-            logger.warning("[offset_estimates_for_product] record without id: %s", rec)
+            logger.warning("[offset_estimates_for_product] record without id: {}", rec)
             continue
 
         try:
             est_qty = Decimal(str(rec.get("textField_mh8x8uxa") or "0"))
         except Exception:
-            logger.error("[offset_estimates_for_product] invalid est qty for record=%s", rec)
+            logger.error("[offset_estimates_for_product] invalid est qty for record={}", rec)
             continue
 
         if est_qty <= 0:
@@ -351,7 +351,7 @@ def offset_estimates_for_product(
         sales_order_no = rec.get("textField_mh8x8uxb", "")
 
         logger.info(
-            "[offset_estimates_for_product] record id=%s, est_qty=%s, remaining=%s",
+            "[offset_estimates_for_product] record id={}, est_qty={}, remaining={}",
             cost_id, est_qty, remaining,
         )
 
@@ -365,7 +365,7 @@ def offset_estimates_for_product(
             update_data["textField_mh8x8uxk"] = "已收票"
 
             logger.info(
-                "[offset_estimates_for_product] full offset: cost_id=%s, used=%s, remaining=%s",
+                "[offset_estimates_for_product] full offset: cost_id={}, used={}, remaining={}",
                 cost_id, used_here, remaining,
             )
             update_cost_record(cost_id, update_data)
@@ -384,7 +384,7 @@ def offset_estimates_for_product(
                 "textField_mh8x8uxk": "暂估",
             }
             logger.info(
-                "[offset_estimates_for_product] partial offset: cost_id=%s, used=%s, remain_est=%s",
+                "[offset_estimates_for_product] partial offset: cost_id={}, used={}, remain_est={}",
                 cost_id, used_here, remain_est,
             )
             update_cost_record(cost_id, update_data_est)
@@ -404,7 +404,7 @@ def offset_estimates_for_product(
             new_data.update(invoice_info or {})
 
             logger.info(
-                "[offset_estimates_for_product] create new cost_record for used part: %s",
+                "[offset_estimates_for_product] create new cost_record for used part: {}",
                 new_data,
             )
             insert_cost_record([new_data])
@@ -416,7 +416,7 @@ def offset_estimates_for_product(
         _append_inventory_by_new_record(product_code, remain_for_inventory, invoice_info)
 
     logger.info(
-        "[offset_estimates_for_product] finish: product_code=%s, qty_input=%s, used_total=%s, remain_for_inventory=%s",
+        "[offset_estimates_for_product] finish: product_code={}, qty_input={}, used_total={}, remain_for_inventory={}",
         product_code, qty_input, used_total, remain_for_inventory,
     )
 
@@ -459,7 +459,7 @@ def process_purchase_item(
     )
 
     logger.info(
-        "Process purchase item: product_code=%s, name=%s, qty_input=%s, unit_price=%s, po_no=%s, invoice_no=%s",
+        "Process purchase item: product_code={}, name={}, qty_input={}, unit_price={}, po_no={}, invoice_no={}",
         product_code, product_name, qty_input, unit_price, po_no, effective_invoice_no
     )
 
@@ -484,6 +484,6 @@ def process_purchase_item(
     )
 
     logger.info(
-        "Purchase item result: product_code=%s, qty_input=%s, used_for_cost=%s, remain_for_stock=%s",
+        "Purchase item result: product_code={}, qty_input={}, used_for_cost={}, remain_for_stock={}",
         product_code, qty_input, used_for_cost, qty_input - used_for_cost
     )
