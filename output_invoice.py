@@ -132,7 +132,8 @@ def update_inventory_row(inv_id: str, used_qty: Decimal, remain_qty: Decimal, st
     # 只更新你关心的几个字段即可，其他字段宜搭会按原有数据保留
     form_data = {
         "numberField_mhlqrhyt": float(used_qty),      # 已结转数量
-        "numberField_mhlqrhyu": float(remain_qty),    # 剩余可用数量
+        "numberField_mhlqrhys": float(remain_qty),    # 剩余可用数量
+        # "numberField_mhlqrhyu": float(used_qty),      # 发票-产品数量
         "radioField_mhlqrhyv": status,                # 未使用 / 部分使用 / 已用完
     }
 
