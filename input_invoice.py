@@ -110,52 +110,55 @@ def update_cost_record(cost_id: str, data: Dict[str, Any]) -> None:
         raise
 
 # 新建进项票库存数据
+# -------- new_inventory_record：真正映射到宜搭字段 --------
 def new_inventory_record(
-    *,
     product_code: str,
     product_name: str,
-    invoice_qty: Decimal,          # 发票-产品数量
-    unit_price: Optional[Decimal], # 采购单价，可为空
-    invoice_no: str,               # 发票号码
-    invoice_date_ms: int,          # 进项开票日期（毫秒时间戳）
-    spec: str,                     # 产品规格
-    category: str,                 # 产品分类
-    unit: str,                     # 单位
-    origin_link: str = "",         # 原流程链接（选填）
-    status: str = "未使用",        # 初始状态：未使用 / 部分使用 / 已用完
+    qty: Decimal,
+    unit_price: Decimal,
+    invoice_info: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    构造一条【进项票库存】记录，字段名对照宜搭表单配置。
+    组装一条【进项票库存】记录（字典），字段名全部是这张表在宜搭里的唯一标识。
     """
 
-    def _dec(v: Optional[Decimal]) -> str:
-        if v is None:
-            return ""
-        return str(v)
+    qty_str = str(qty)
+    unit_price_str = str(unit_price)
 
-    qty_str = _dec(invoice_qty)
+    invoice_no = invoice_info.get("invoice_no", "")
+    invoice_date_ms = invoice_info.get("invoice_date_ms")   # 进项票日期（毫秒）
+    spec = invoice_info.get("spec") or "--"
+    category = invoice_info.get("category") or "--"
+    unit = invoice_info.get("unit") or "--"
+    origin_link = invoice_info.get("origin_link", "")
 
     return {
-        # 数量相关
-        "numberField_mhlqrhys": qty_str,          # 剩余可用数量 = 初始全部可用
-        "numberField_mhlqrhyt": "0",             # 已结转数量 = 0
-        "numberField_mhlqrhyu": qty_str,         # 发票-产品数量 = 发票数量
-
-        # 元数据
-        "textField_mhlqrhyo": origin_link,       # 原流程链接
-        "radioField_mhlqrhyv": status,           # 状态
-
-        # 发票信息
-        "textField_mhlqhrz3": invoice_no,        # 发票号码
-        "dateField_mhlqhrz2": invoice_date_ms,   # 进项开票日期（毫秒）
-
-        # 产品信息
-        "textField_mhlqhrhyx": product_name,     # 产品名称
-        "textField_mhlqrhyy": product_code,      # 产品编号
-        "numberField_mhlqhrz1": _dec(unit_price),# 采购单价
-        "textField_mhlqhrz4": spec,              # 产品规格
-        "textField_mhlqhrz5": category,          # 产品分类
-        "textField_mhlqhrz6": unit,              # 单位
+        # 剩余可用数量
+        "numberField_mhlqrhys": qty_str,
+        # 已结转数量
+        "numberField_mhlqrhyt": "0",
+        # 发票-产品数量
+        "numberField_mhlqrhyu": qty_str,
+        # 原流程链接
+        "textField_mhlqrhyo": origin_link,
+        # 状态
+        "radioField_mhlqrhyv": "未使用",
+        # 发票号码
+        "textField_mhlqrz3": invoice_no,
+        # 进项开票日期
+        "dateField_mhlqrz2": invoice_date_ms,
+        # 产品名称
+        "textField_mhlqrhyx": product_name,
+        # 采购单价
+        "numberField_mhlqrz1": unit_price_str,
+        # 产品规格
+        "textField_mhlqrz4": spec,
+        # 产品分类
+        "textField_mhlqrz5": category,
+        # 单位
+        "textField_mhlqrz6": unit,
+        # 产品编号
+        "textField_mhlqrhyy": product_code,
     }
 
 
@@ -206,52 +209,38 @@ def insert_inventory_record(record: Dict[str, Any]) -> None:
         raise
 
 
+# -------- offset_estimates_for_product 里新增库存那一段 --------
 def _append_inventory_by_new_record(
     product_code: str,
-    qty: Decimal,
+    qty_for_inventory: Decimal,
     invoice_info: Dict[str, Any],
 ) -> None:
     """
-    用 new_inventory_record 构造库存记录并写入【进项票库存】。
-    要求 invoice_info 至少包含：
-      - product_name
-      - unit_price
-      - invoice_no
-      - invoice_date_ms
-      - spec
-      - category
-      - unit
+    没有暂估，或者冲销完还有剩余时，用本次进项剩余数量生成一条【进项票库存】记录。
     """
+    product_name = invoice_info.get("product_name", "")
+    unit_price = invoice_info.get("unit_price") or Decimal("0")
 
-    if qty <= 0:
-        return
-
-    try:
-        record = new_inventory_record(
-            product_code=product_code,
-            product_name=invoice_info["product_name"],
-            invoice_qty=qty,
-            unit_price=invoice_info.get("unit_price"),
-            invoice_no=invoice_info["invoice_no"],
-            invoice_date_ms=invoice_info["invoice_date_ms"],
-            spec=invoice_info.get("spec", ""),
-            category=invoice_info.get("category", ""),
-            unit=invoice_info.get("unit", ""),
-            origin_link=invoice_info.get("origin_link", ""),
-            status="未使用",
-        )
-    except KeyError as e:
-        logger.error(
-            "[_append_inventory_by_new_record新增进项票录入数据] missing key in invoice_info: {}, invoice_info={}",
-            e, invoice_info,
-        )
-        return
-
-    logger.info(
-        "[_append_inventory_by_new_record新增进项票录入数据] product_code={}, qty={}, record={}",
-        product_code, qty, record,
+    logger.warning(
+        "[_append_inventory_by_new_record] code={}, qty={}, spec={}, category={}, unit={}",
+        product_code,
+        qty_for_inventory,
+        invoice_info.get("spec"),
+        invoice_info.get("category"),
+        invoice_info.get("unit"),
     )
+
+    record = new_inventory_record(
+        product_code=product_code,
+        product_name=product_name,
+        qty=qty_for_inventory,
+        unit_price=unit_price,
+        invoice_info=invoice_info,
+    )
+
+    logger.warning("[_append_inventory_by_new_record] record={}", record)
     insert_inventory_record(record)
+
 
 
 def offset_estimates_for_product(
@@ -439,46 +428,32 @@ def process_purchase_item(
         - 若该产品没有“暂估”记录 → 本次进项数量全量入【进项票库存】
     """
 
-    # ===== 基础字段（按照你当前的 PurchaseItem 定义） =====
     product_code = item.textField_mi8pp1wf          # 产品编号
     product_name = item.textField_mi8pp1we          # 产品名称
     qty_input: Decimal = item.numberField_mi8pp1wg  # 本次进项数量
     unit_price: Decimal = item.numberField_mi8pp1wh or Decimal("0")
 
-    # 产品属性
     spec = item.textField_mi8pp1wi                  # 产品规格
     category = item.textField_mi8pp1wj              # 产品分类
     unit = item.textField_mi8pp1wk                  # 单位
 
-    # 采购单维度信息（每条明细自带）
-    po_no = item.textField_miu32cdn                 # 采购订单号
-    purchase_invoice_no = item.textField_miu32cdl   # 采购发票号
-    purchase_invoice_date_ms = item.dateField_miu32cdo  # 采购开票日期（毫秒时间戳）
+    invoice_date_ms = int(invoice_date.timestamp() * 1000)
 
-    # 兼容：如果行里没带发票信息，就退回到函数入参
-    effective_invoice_no = purchase_invoice_no or invoice_no
-    effective_invoice_date_ms = purchase_invoice_date_ms or int(
-        invoice_date.timestamp() * 1000
-    )
-
-    logger.info(
-        "Process purchase item: product_code={}, name={}, qty_input={}, unit_price={}, po_no={}, invoice_no={}",
-        product_code, product_name, qty_input, unit_price, po_no, effective_invoice_no
-    )
-
-    # ===== 构造进项信息，交给 offset_estimates_for_product 使用 =====
-    invoice_info: Dict[str, object] = {
+    invoice_info = {
         "product_name": product_name,
         "unit_price": unit_price,
-        "invoice_no": effective_invoice_no,
-        "invoice_date_ms": effective_invoice_date_ms,
+        "invoice_no": invoice_no,
+        "invoice_date_ms": invoice_date_ms,
         "spec": spec,
         "category": category,
         "unit": unit,
-        "purchase_order_no": po_no,
-        "origin_link": "",  # 有原流程链接就塞这里
-        # 你成本结转/库存表还有其他字段，就在这里继续补键值对
+        "origin_link": "",
     }
+
+    logger.warning(
+        "[process_purchase_item] code={}, qty={}, spec={}, category={}, unit={}",
+        product_code, qty_input, spec, category, unit
+    )
 
     used_for_cost = offset_estimates_for_product(
         product_code=product_code,
@@ -487,6 +462,6 @@ def process_purchase_item(
     )
 
     logger.info(
-        "Purchase item result: product_code={}, qty_input={}, used_for_cost={}, remain_for_stock={}",
+        "Purchase item result: product_code=%s, qty_input=%s, used_for_cost=%s, remain_for_stock=%s",
         product_code, qty_input, used_for_cost, qty_input - used_for_cost
     )
