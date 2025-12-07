@@ -125,7 +125,7 @@ async def get_sales_list(
     # 1. 优先走 Form（Swagger / 正常表单）
     if sales_list is not None:
         raw_items = sales_list
-        logger.info("[get_sales_list开票管理申请] from Form sales_list=%s", raw_items)
+        logger.info("[get_sales_list开票管理申请] from Form sales_list={}", raw_items)
     else:
         # 2. 兜底：老的 raw body 解析（目前宜搭就是这么传的）
         raw_body = (await request.body()).decode("utf-8")
@@ -135,7 +135,7 @@ async def get_sales_list(
         # logger.info("[Parsed Form] %s", form)
 
         raw_items = form.get("sales_list", ["[]"])[0]
-        logger.info("[get_sales_list开票管理申请] from Body sales_list=%s", raw_items)
+        # logger.info("[get_sales_list开票管理申请] from Body sales_list=%s", raw_items)
 
     # 一般不需要，但留着不犯错
     raw_items = unquote(raw_items)
@@ -143,15 +143,15 @@ async def get_sales_list(
     try:
         items = json.loads(raw_items)
     except Exception as e:
-        logger.error("[get_sales_list开票管理申请] json.loads failed: %s, raw_items=%s", e, raw_items)
+        logger.error("[get_sales_list开票管理申请] json.loads failed: {}, raw_items={}", e, raw_items)
         return {"ok": False, "msg": "invalid sales_list json"}
 
-    logger.info("[Final Parsed JSON] %s", items)
+    logger.info("[Final Parsed JSON] {}", items)
 
     try:
         sl = SalesList(sales_items=items)
     except Exception as e:
-        logger.error("[get_sales_list开票管理申请] SalesList validation failed: %s", e)
+        logger.error("[get_sales_list开票管理申请] SalesList validation failed: {}", e)
         return {"ok": False, "msg": "invalid sales_items schema"}
 
     # 逐条处理

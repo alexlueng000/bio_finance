@@ -172,12 +172,12 @@ def insert_cost_record(records: List[Dict[str, Any]]) -> None:
         ],
     }
 
-    logger.info("[insert_cost_record] request body=%s", body)
+    logger.info("[insert_cost_record] request body={}", body)
 
     resp = requests.post(INSERT_INSTANCE_URL, headers=headers, data=json.dumps(body))
     text = resp.text
     logger.info(
-        "[insert_cost_record] http_status=%s, raw_body=%s",
+        "[insert_cost_record] http_status={}, raw_body={}",
         resp.status_code,
         text,
     )
@@ -190,7 +190,7 @@ def insert_cost_record(records: List[Dict[str, Any]]) -> None:
         except Exception:
             err_json = None
         logger.error(
-            "[insert_cost_record] HTTPError status=%s, body_text=%s, body_json=%s",
+            "[insert_cost_record] HTTPError status={}, body_text={}, body_json={}",
             resp.status_code,
             text,
             err_json,
@@ -228,7 +228,7 @@ def process_sales_item(item: SalesItem) -> None:
     apply_qty: Decimal = item.numberField_m7ecqbog  # 本次销项数量（瓶）
 
     logger.info(
-        "[process_sales_item] product_code=%s, name=%s, apply_qty=%s",
+        "[process_sales_item处理销项明细] product_code={}, name={}, apply_qty={}",
         product_code, product_name, apply_qty
     )
 
@@ -251,9 +251,11 @@ def process_sales_item(item: SalesItem) -> None:
 
     available_qty = Decimal("0")
 
+    logger.info("[process_sales_item查询到进项票库存] inventory_rows={}", inventory_rows)
+
     for r in inventory_rows:
         if not isinstance(r, dict):
-            logger.warning("invalid inventory row: %r", r)
+            logger.warning("invalid inventory row: {}", r)
             continue
 
         remain = Decimal(str(r.get("remain_qty", "0") or "0"))
@@ -274,7 +276,7 @@ def process_sales_item(item: SalesItem) -> None:
         estimate_qty = apply_qty - available_qty
 
     logger.info(
-        "[process_sales_item] split: cost_qty=%s, estimate_qty=%s",
+        "[process_sales_item] split: cost_qty={}, estimate_qty={}",
         cost_qty, estimate_qty
     )
 
@@ -323,11 +325,11 @@ def process_sales_item(item: SalesItem) -> None:
     # 暂估数量不动库存
     if cost_qty <= 0:
         logger.info(
-            "[process_sales_item] cost_qty <= 0, skip inventory deduction for product_code=%s",
+            "[process_sales_item] cost_qty <= 0, skip inventory deduction for product_code={}",
             product_code,
         )
         logger.info(
-            "[process_sales_item] finished: product_code=%s, apply_qty=%s, cost_qty=%s, estimate_qty=%s",
+            "[process_sales_item] finished: product_code={}, apply_qty={}, cost_qty={}, estimate_qty={}",
             product_code, apply_qty, cost_qty, estimate_qty
         )
         return
@@ -373,7 +375,7 @@ def process_sales_item(item: SalesItem) -> None:
             status = "部分使用"
 
         logger.info(
-            "[process_sales_item] consume inventory_row id=%s, use_here=%s, new_used=%s, new_remain=%s, status=%s",
+            "[process_sales_item] consume inventory_row id={}, use_here={}, new_used={}, new_remain={}, status={}",
             row.get("id"), use_here, new_used, new_remain, status
         )
 
@@ -387,6 +389,6 @@ def process_sales_item(item: SalesItem) -> None:
         remaining_to_consume -= use_here
 
     logger.info(
-        "[process_sales_item] finished: product_code=%s, apply_qty=%s, cost_qty=%s, estimate_qty=%s, remaining_to_consume=%s",
+        "[process_sales_item] finished: product_code={}, apply_qty={}, cost_qty={}, estimate_qty={}, remaining_to_consume={}",
         product_code, apply_qty, cost_qty, estimate_qty, remaining_to_consume
     )
