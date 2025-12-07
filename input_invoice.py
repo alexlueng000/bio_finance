@@ -132,6 +132,19 @@ def new_inventory_record(
     unit = invoice_info.get("unit") or "--"
     origin_link = invoice_info.get("origin_link", "")
 
+    logger.info(
+        "[new_inventory_record]组装一条【进项票库存】记录 product_code={}, qty={}, spec={}, category={}, unit={}, invoice_no={}, invoice_date_ms={}, origin_link={}, unit_price={}",
+        product_code,
+        qty,
+        spec,
+        category,
+        unit,
+        invoice_no,
+        invoice_date_ms,
+        origin_link,
+        unit_price
+    )
+
     return {
         # 剩余可用数量
         "numberField_mhlqrhys": qty_str,
@@ -144,17 +157,17 @@ def new_inventory_record(
         # 状态
         "radioField_mhlqrhyv": "未使用",
         # 发票号码
-        "textField_mhlqrz3": invoice_no,
+        "textField_mhlqrhz3": invoice_no,
         # 进项开票日期
-        "dateField_mhlqrz2": invoice_date_ms,
+        "dateField_mhlqrhz2": invoice_date_ms,
         # 产品名称
         "textField_mhlqrhyx": product_name,
         # 采购单价
         "numberField_mhlqrz1": unit_price_str,
         # 产品规格
-        "textField_mhlqrz4": spec,
+        "textField_mhlqrhz4": spec,
         # 产品分类
-        "textField_mhlqrz5": category,
+        "textField_mhlqrhz5": category,
         # 单位
         "textField_mhlqrz6": unit,
         # 产品编号
