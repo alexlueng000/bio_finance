@@ -254,6 +254,52 @@ def _append_inventory_by_new_record(
     logger.warning("[_append_inventory_by_new_record] record={}", record)
     insert_inventory_record(record)
 
+def get_estimates_for_product(product_code: str) -> List[Dict[str, Any]]:
+    search_conditions = {
+        "textField_mhd56jjz": product_code,  # 产品编号
+        "textField_mh8x8uxk": "暂估",        # 状态=暂估
+    }
+
+    access_token = get_dingtalk_access_token()
+    headers = {
+        "x-acs-dingtalk-access-token": access_token,
+        "Content-Type": "application/json",
+    }
+
+    body = {
+        "appType": "APP_JSXMR8UNH0GRZUNHO3Y2",
+        "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",
+        "formUuid": cost_carry_forward_table,
+        "userId": "203729096926868966",
+        "searchFieldJson": json.dumps(search_conditions, ensure_ascii=False),
+    }
+
+    resp = requests.post(SEARCH_REQUEST_URL, headers=headers, data=json.dumps(body))
+    resp.raise_for_status()
+    raw = resp.json()
+
+    # ✅ 这里统一在一个地方把 list 抠出来
+    if isinstance(raw, dict):
+        records = (
+            raw.get("data")
+            or raw.get("result", {}).get("data")
+            or raw.get("result", {}).get("list")
+            or raw.get("body")
+            or []
+        )
+    elif isinstance(raw, list):
+        records = raw
+    else:
+        records = []
+
+    logger.info(
+        "[get_estimates_for_product] product_code=%s, type(raw)=%s, keys=%s, count=%s",
+        product_code,
+        type(raw).__name__,
+        list(raw.keys()) if isinstance(raw, dict) else None,
+        len(records),
+    )
+    return records
 
 
 def offset_estimates_for_product(
@@ -278,44 +324,39 @@ def offset_estimates_for_product(
 
     # 1. 查询该产品的所有“暂估”记录
     raw = query_estimate_records(product_code)
-    if not raw:
-        logger.info(
-            "[offset_estimates_for_product] no estimate records, product_code={}",
-            product_code,
-        )
-        # 没有暂估，后面直接把全部数量入库存
-        remain_for_inventory = remaining
-        if remain_for_inventory > 0:
-            _append_inventory_by_new_record(product_code, remain_for_inventory, invoice_info)
-        return Decimal("0")
 
-    # 解析宜搭返回结构
+    # ------- 统一把 raw 解析成 records(list) -------
     records: List[Dict[str, Any]] = []
     if isinstance(raw, dict):
-        if isinstance(raw.get("data"), list):
-            records = raw["data"]
-        elif isinstance(raw.get("result"), dict) and isinstance(raw["result"].get("data"), list):
-            records = raw["result"]["data"]
-        elif isinstance(raw.get("result"), dict) and isinstance(raw["result"].get("list"), list):
-            records = raw["result"]["list"]
-        elif isinstance(raw.get("body"), list):
-            records = raw["body"]
+        records = (
+            raw.get("data")
+            or raw.get("result", {}).get("data")
+            or raw.get("result", {}).get("list")
+            or raw.get("body")
+            or []
+        )
     elif isinstance(raw, list):
         records = raw
+    else:
+        records = []
 
     if not records:
         logger.info(
-            "[offset_estimates_for_product] estimate list empty after extraction, raw={}",
-            raw,
+            "[offset_estimates_for_product] no estimate records after extraction, product_code={}, raw_type={}",
+            product_code,
+            type(raw).__name__,
         )
-        remain_for_inventory = remaining
-        if remain_for_inventory > 0:
-            _append_inventory_by_new_record(product_code, remain_for_inventory, invoice_info)
+        # 没有暂估，直接全部入库存
+        if remaining > 0:
+            _append_inventory_by_new_record(product_code, remaining, invoice_info)
         return Decimal("0")
 
-    # 2. 按销项票日期 FIFO
+    # 2. 按销项票日期 FIFO 排序
     def _get_sales_date(rec: Dict[str, Any]) -> int:
-        v = rec.get("dateField_mh8x8uxc")
+        # 宜搭结构：一层是实例，真正字段在 formData 里
+        data = rec.get("formData") if isinstance(rec, dict) else None
+        row = data or rec
+        v = row.get("dateField_mh8x8uxc")
         try:
             return int(v)
         except Exception:
@@ -325,7 +366,7 @@ def offset_estimates_for_product(
 
     used_total = Decimal("0")
     logger.info(
-        "[offset_estimates_for_product] start offset, product_code={}, qty_input={}, estimate_records=%d",
+        "[offset_estimates_for_product] start offset, product_code={}, qty_input={}, estimate_count={}",
         product_code, qty_input, len(records_sorted),
     )
 
@@ -333,27 +374,36 @@ def offset_estimates_for_product(
         if remaining <= 0:
             break
 
+        # 外层实例 ID
         cost_id = rec.get("formInstanceId") or rec.get("id")
         if not cost_id:
             logger.warning("[offset_estimates_for_product] record without id: {}", rec)
             continue
 
+        # 真正的字段在 formData 里
+        data = rec.get("formData") if isinstance(rec, dict) else None
+        row = data or rec
+
         try:
-            est_qty = Decimal(str(rec.get("textField_mh8x8uxa") or "0"))
+            est_qty = Decimal(str(row.get("textField_mh8x8uxa") or "0"))
         except Exception:
-            logger.error("[offset_estimates_for_product] invalid est qty for record={}", rec)
+            logger.error(
+                "[offset_estimates_for_product] invalid est qty for record_id={}, row={}",
+                cost_id,
+                row,
+            )
             continue
 
         if est_qty <= 0:
             continue
 
-        sales_date = rec.get("dateField_mh8x8uxc")
-        product_name = rec.get("textField_mh8x8uwz", "")
-        batch_no = rec.get("textField_mh8x8ux0", "")
-        customer = rec.get("textField_mh8x8ux1", "")
-        invoice_type = rec.get("textField_mh8x8ux8", "")
-        sales_invoice_no = rec.get("textField_mh8x8ux9", "")
-        sales_order_no = rec.get("textField_mh8x8uxb", "")
+        sales_date = row.get("dateField_mh8x8uxc")
+        product_name = row.get("textField_mh8x8uwz", "")
+        batch_no = row.get("textField_mh8x8ux0", "")
+        customer = row.get("textField_mh8x8ux1", "")
+        invoice_type = row.get("textField_mh8x8ux8", "")
+        sales_invoice_no = row.get("textField_mh8x8ux9", "")
+        sales_order_no = row.get("textField_mh8x8uxb", "")
 
         logger.info(
             "[offset_estimates_for_product] record id={}, est_qty={}, remaining={}",
@@ -367,7 +417,8 @@ def offset_estimates_for_product(
             used_total += used_here
 
             update_data = dict(invoice_info or {})
-            update_data["textField_mh8x8uxk"] = "已收票"
+            update_data["textField_mh8x8uxk"] = "已收票"         # 状态
+            update_data["textField_mh8x8uxa"] = str(est_qty)    # 数量保持原值（代表这条已全部收票）
 
             logger.info(
                 "[offset_estimates_for_product] full offset: cost_id={}, used={}, remaining={}",
@@ -383,7 +434,7 @@ def offset_estimates_for_product(
 
             remain_est = est_qty - used_here
 
-            # ②-a 原记录改为剩余暂估
+            # ②-a 原记录改为剩余“暂估”
             update_data_est = {
                 "textField_mh8x8uxa": str(remain_est),
                 "textField_mh8x8uxk": "暂估",
@@ -406,6 +457,7 @@ def offset_estimates_for_product(
                 sales_order_no=sales_order_no,
                 status="已收票",
             )
+            # 把本次进项的发票信息同步进去（供应商等）
             new_data.update(invoice_info or {})
 
             logger.info(
@@ -416,7 +468,7 @@ def offset_estimates_for_product(
             break  # 进项数量已经用完
 
     # 3. 剩余数量入【进项票库存】
-    remain_for_inventory = qty_input - used_total
+    remain_for_inventory = remaining  # 剩下的就是进库存的
     if remain_for_inventory > 0:
         _append_inventory_by_new_record(product_code, remain_for_inventory, invoice_info)
 
@@ -426,6 +478,7 @@ def offset_estimates_for_product(
     )
 
     return used_total
+
 
 
 def process_purchase_item(
@@ -475,6 +528,6 @@ def process_purchase_item(
     )
 
     logger.info(
-        "Purchase item result: product_code=%s, qty_input=%s, used_for_cost=%s, remain_for_stock=%s",
+        "Purchase item result: product_code={}, qty_input={}, used_for_cost={}, remain_for_stock={}",
         product_code, qty_input, used_for_cost, qty_input - used_for_cost
     )
