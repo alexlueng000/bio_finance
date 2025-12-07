@@ -52,7 +52,7 @@ def query_estimate_records(product_code: str) -> List[Dict[str, Any]]:
         resp = requests.post(SEARCH_REQUEST_URL, headers=headers, data=json.dumps(body))
         # resp.raise_for_status()
         data = resp.json()
-        print(data)
+        # print(data)
         return data
 
     except requests.HTTPError as e:
@@ -63,22 +63,40 @@ def query_estimate_records(product_code: str) -> List[Dict[str, Any]]:
 
 def update_cost_record(cost_id: str, data: Dict[str, Any]) -> None:
     """
-    将成本结转底表中指定记录从“暂估”更新为“结转成本/已收票”。
-    支持同步修改数量、金额等字段。
-    用于进项到票后对原暂估记录进行状态回写。
+    更新【成本结转底表】中的记录。
+    仅更新：
+      - 状态(textField_mh8x8uxk)
+      - 进项票开票日期(dateField_mh8x8uxt)
+      - 关联进项票发票号(textField_mh8x8uxr)
+      - 采购订单号(textField_mh8x8uxs)
+    data 由 invoice_info 传入，需要包含以下字段：
+        invoice_date_ms
+        invoice_no
+        purchase_order_no
     """
+
     access_token = get_dingtalk_access_token()
     headers = {
         "x-acs-dingtalk-access-token": access_token,
         "Content-Type": "application/json",
     }
 
-    # 只更新你关心的几个字段即可，其他字段宜搭会按原有数据保留
+    invoice_date_ms = data.get("invoice_date_ms") or None
+    invoice_no = data.get("invoice_no") or ""
+    purchase_order_no = data.get("purchase_order_no") or ""
+
     form_data = {
+        # 状态：暂估 → 已收票
         "textField_mh8x8uxk": "已收票",
-        "dateField_mh8x8uxt": data["进项票-开票日期"],
-        "textField_mh8x8uxr": data["关联进项票发票号"],
-        "textField_mh8x8uxs": data["采购订单号"],
+
+        # 进项开票日期
+        "dateField_mh8x8uxt": invoice_date_ms,
+
+        # 关联进项票号码
+        "textField_mh8x8uxr": invoice_no,
+
+        # 采购订单号（如果原表有）
+        "textField_mh8x8uxs": purchase_order_no,
     }
 
     body = {
@@ -86,28 +104,26 @@ def update_cost_record(cost_id: str, data: Dict[str, Any]) -> None:
         "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",
         "formUuid": cost_carry_forward_table,
         "formInstanceId": cost_id,
-        # "targetTenantId": YIDA_TENANT_ID,     # 如果你现在没这个值，可以先去掉这一行试；报错再补
         "userId": "203729096926868966",
         "updateFormDataJson": json.dumps(form_data, ensure_ascii=False),
     }
 
     logger.info(
-        "[update_cost_record更新成本结转底表] cost_id={}, body={}",
-        cost_id, body,
+        "[update_cost_record] cost_id=%s, form_data=%s",
+        cost_id, form_data,
     )
 
     try:
         resp = requests.put(UPDATE_INSTANCE_URL, headers=headers, data=json.dumps(body))
         resp.raise_for_status()
-        data = resp.json()
-        logger.info("[update_cost_record更新成本结转底表] success, resp={}", data)
+        logger.info("[update_cost_record] success, resp=%s", resp.json())
     except requests.exceptions.HTTPError as e:
-        # 打印一下钉钉返回的错误 body，方便你调字段名
-        logger.error("[update_cost_record更新成本结转底表] HTTPError: {}, body={}", e, getattr(e.response, "text", ""))
+        logger.error("[update_cost_record] HTTPError: %s, body=%s", e, getattr(e.response, "text", ""))
         raise
     except Exception as e:
-        logger.error("[update_cost_record更新成本结转底表] failed: {}", e)
+        logger.error("[update_cost_record] failed: %s", e)
         raise
+
 
 # 新建进项票库存数据
 # -------- new_inventory_record：真正映射到宜搭字段 --------
