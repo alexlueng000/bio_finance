@@ -15,46 +15,102 @@ from config import SEARCH_REQUEST_URL, UPDATE_INSTANCE_URL, INSERT_INSTANCE_URL
 
 # === 进项票库存 ===
 # 根据产品编号获取进项票库存中的该产品的所有记录
-def get_inventory_for_product(product_code: str) -> List[Dict[str, Any]]:
+from decimal import Decimal
+from typing import List, Dict, Any
+import json
+import requests
+from loguru import logger
 
+from config import input_invoice_inventory_table, SEARCH_REQUEST_URL
+from yida_client import get_dingtalk_access_token
+
+
+def get_inventory_for_product(product_code: str) -> List[Dict[str, Any]]:
+    """
+    查询【进项票库存】中某产品的库存，返回“行列表”，供销项 FIFO 扣减使用。
+
+    返回结构（示例）：
+    [
+      {
+        "id": "FINST-xxx",              # formInstanceId
+        "remain_qty": Decimal("500"),   # 剩余可用数量 numberField_mhlqrhys
+        "used_qty":   Decimal("0"),     # 已结转数量 numberField_mhlqrhyt
+        "status":     "未使用",          # radioField_mhlqrhyv
+        "invoice_no_in": "2515...",     # textField_mhlqrhz3
+        "invoice_date_ms": 1747756800000,  # dateField_mhlqrhz2
+      },
+      ...
+    ]
+
+    只保留 remain_qty > 0 的行，并按进项开票日期升序排序。
+    """
     logger.info("[get_inventory_for_product查询产品编号为{}的进项票库存]", product_code)
 
-    product_search_conditions = {
+    search_cond = {
         "textField_mhlqrhyy": product_code,
     }
 
     access_token = get_dingtalk_access_token()
-    
     headers = {
         "x-acs-dingtalk-access-token": access_token,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
-    logger.info("[get_inventory_for_product查询产品编号为{}的进项票库存] product_search_conditions={}", product_code, product_search_conditions)
-
     body = {
-        "appType": "APP_JSXMR8UNH0GRZUNHO3Y2",             # 固定为 APP（宜搭应用）
-        "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",  # 宜搭 System Token
+        "appType": "APP_JSXMR8UNH0GRZUNHO3Y2",
+        "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",
         "formUuid": input_invoice_inventory_table,
-        # "pageSize": 20,
-        # "pageNumber": 1,
-        "dataCreateFrom": 0,          # 可选：0=全部；1=我创建；2=我参与
-        "userId": "203729096926868966",           # 这里换成有权限访问该宜搭应用/表单的用户
-        # 搜索条件
-        "searchFieldJson": json.dumps(product_search_conditions, ensure_ascii=False),
-     }
+        "dataCreateFrom": 0,
+        "userId": "203729096926868966",
+        "searchFieldJson": json.dumps(search_cond, ensure_ascii=False),
+        "pageSize": 50,
+        "pageNumber": 1,
+    }
 
-    try:
-        resp = requests.post(SEARCH_REQUEST_URL, headers=headers, data=json.dumps(body))
-        # resp.raise_for_status()
-        data = resp.json()
-        print(data)
-        return data
+    logger.info(
+        "[get_inventory_for_product查询产品编号为{}的进项票库存] product_search_conditions={}",
+        product_code,
+        search_cond,
+    )
 
-    except requests.HTTPError as e:
-        print(f"❌ HTTP错误：{e}，响应：{getattr(e.response, 'text', '')}")
-    except Exception as e:
-        print(f"❌ 请求失败：{e}")
+    resp = requests.post(SEARCH_REQUEST_URL, headers=headers, data=json.dumps(body))
+    resp.raise_for_status()
+    js = resp.json()
+
+    logger.info("[get_inventory_for_product原始响应] {}", js)
+
+    rows: List[Dict[str, Any]] = []
+    for item in js.get("data", []):
+        fd = item.get("formData", {})
+
+        # 剩余可用数量
+        remain = Decimal(str(fd.get("numberField_mhlqrhys", 0) or 0))
+        # 已结转数量
+        used = Decimal(str(fd.get("numberField_mhlqrhyt", 0) or 0))
+
+        # 没剩余的不要参与 FIFO
+        if remain <= 0:
+            continue
+
+        row = {
+            "id": item["formInstanceId"],
+            "remain_qty": remain,
+            "used_qty": used,
+            "status": fd.get("radioField_mhlqrhyv") or "",
+            "invoice_no_in": fd.get("textField_mhlqrhz3", ""),
+            "invoice_date_ms": fd.get("dateField_mhlqrhz2"),
+        }
+        rows.append(row)
+
+    # 按进项开票日期升序，没有日期的排最后
+    rows.sort(key=lambda r: (r.get("invoice_date_ms") is None, r.get("invoice_date_ms") or 0))
+
+    logger.info(
+        "[get_inventory_for_product解析后库存行] product_code={}, rows={}",
+        product_code,
+        [{"id": r["id"], "remain_qty": str(r["remain_qty"]), "status": r["status"]} for r in rows],
+    )
+    return rows
 
 
 # 更新
@@ -235,34 +291,12 @@ def process_sales_item(item: SalesItem) -> None:
     )
 
     # ========= 1. 查询进项票库存（FIFO，remain_qty > 0） =========
-    raw_rows = get_inventory_for_product(product_code)
+    logger.info("[process_sales_item查询进项票库存000] product_code={}", product_code)
+    inventory_rows = get_inventory_for_product(product_code)
+    logger.info("[process_sales_item查询进项票库存001] inventory_rows={}", inventory_rows)
+    available_qty = sum(r["remain_qty"] for r in inventory_rows)
+    logger.info("[process_sales_item查询进项票库存002] available_qty={}", available_qty)
 
-    # 永远确保是 list
-    if not raw_rows:
-        inventory_rows = []
-    elif isinstance(raw_rows, list):
-        inventory_rows = raw_rows
-    elif isinstance(raw_rows, str):
-        try:
-            tmp = json.loads(raw_rows)
-            inventory_rows = tmp if isinstance(tmp, list) else []
-        except:
-            inventory_rows = []
-    else:
-        inventory_rows = []
-
-    available_qty = Decimal("0")
-
-    logger.info("[process_sales_item查询到进项票库存] inventory_rows={}", inventory_rows)
-
-    for r in inventory_rows:
-        if not isinstance(r, dict):
-            logger.warning("invalid inventory row: {}", r)
-            continue
-
-        remain = Decimal(str(r.get("remain_qty", "0") or "0"))
-        if remain > 0:
-            available_qty += remain
     # ========= 2. 计算结转成本数量 & 暂估数量 =========
     if available_qty <= 0:
         # 完全没有可用库存 → 全部暂估
