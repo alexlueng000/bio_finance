@@ -12,6 +12,9 @@ input_invoice_inventory_table = "FORM-89A730941FD04889911C34B044E6A64EJS4Y"
 # 开票申请管理
 sales_invoice_application_table ="FORM-8A4A88B46E6C4776AE3CF3938C9C21E7UUKP"
 
+# 产品信息
+product_info_table = "FORM-76DAF59015764D74BC8BAADBE24D1012DT7S"
+
 
 # 查询表数据路由
 SEARCH_REQUEST_URL = "https://api.dingtalk.com/v2.0/yida/forms/instances/search"

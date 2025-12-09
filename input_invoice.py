@@ -11,7 +11,7 @@ from config import input_invoice_inventory_table, cost_carry_forward_table
 from config import UPDATE_INSTANCE_URL, SEARCH_REQUEST_URL, INSERT_INSTANCE_URL
 from yida_client import get_dingtalk_access_token
 
-from utils import new_cost_record, insert_cost_record
+from utils import new_cost_record, insert_cost_record, update_product_info_table
 
 
 # === 成本结转底表：查询 / 更新 / 删除 ===
@@ -487,6 +487,19 @@ def offset_estimates_for_product(
     remain_for_inventory = remaining  # 剩下的就是进库存的
     if remain_for_inventory > 0:
         _append_inventory_by_new_record(product_code, remain_for_inventory, invoice_info)
+
+    # 4. 更新进项表总数量
+    # 1. 如果产品信息表，就更新进项票总数 2.如果没有，就新增一条
+    
+    # 4. 更新进项表总数量：无论是否冲销暂估，产品信息表都要累计本次进项总量
+    try:
+        update_product_info_table(product_code, "进项票", int(qty_input))
+    except Exception as e:
+        logger.error(
+            "[offset_estimates_for_product更新进项表总数量] update_product_info_table failed: product_code=%s, qty_input=%s, err=%s",
+            product_code, qty_input, e,
+        )
+        raise
 
     logger.info(
         "[offset_estimates_for_product] finish: product_code={}, qty_input={}, used_total={}, remain_for_inventory={}",

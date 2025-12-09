@@ -12,19 +12,9 @@ from yida_client import get_dingtalk_access_token
 from config import input_invoice_inventory_table, cost_carry_forward_table
 from config import SEARCH_REQUEST_URL, UPDATE_INSTANCE_URL, INSERT_INSTANCE_URL
 
+from utils import update_product_info_table
 
-# === 进项票库存 ===
 # 根据产品编号获取进项票库存中的该产品的所有记录
-from decimal import Decimal
-from typing import List, Dict, Any
-import json
-import requests
-from loguru import logger
-
-from config import input_invoice_inventory_table, SEARCH_REQUEST_URL
-from yida_client import get_dingtalk_access_token
-
-
 def get_inventory_for_product(product_code: str) -> List[Dict[str, Any]]:
     """
     查询【进项票库存】中某产品的库存，返回“行列表”，供销项 FIFO 扣减使用。
@@ -317,6 +307,17 @@ def process_sales_item(item: SalesItem) -> None:
         cost_qty, estimate_qty
     )
 
+    # ========= 2.5 更新产品信息表（销项累计） =========
+    # 产品信息表的“销项总量”与是否有库存/是否暂估无关，按开票数量累计
+    try:
+        update_product_info_table(product_code, "销项票", int(apply_qty))
+    except Exception as e:
+        logger.error(
+            "[process_sales_item] update_product_info_table failed: product_code=%s, apply_qty=%s, err=%s",
+            product_code, apply_qty, e,
+        )
+        raise
+
     # ========= 3. 生成【成本结转底表】记录 =========
     cost_records: List[Dict[str, Any]] = []
 
@@ -424,6 +425,9 @@ def process_sales_item(item: SalesItem) -> None:
         )
 
         remaining_to_consume -= use_here
+
+
+
 
     logger.info(
         "[process_sales_item] finished: product_code={}, apply_qty={}, cost_qty={}, estimate_qty={}, remaining_to_consume={}",
