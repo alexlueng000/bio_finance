@@ -356,143 +356,144 @@ def offset_estimates_for_product(
     else:
         records = []
 
+    used_total = Decimal("0")  # ⭐ 不管有没有 records，都要有这个
+
     if not records:
         logger.info(
             "[offset_estimates_for_product] no estimate records after extraction, product_code={}, raw_type={}",
             product_code,
             type(raw).__name__,
         )
-        # 没有暂估，直接全部入库存
-        if remaining > 0:
-            _append_inventory_by_new_record(product_code, remaining, invoice_info)
-        return Decimal("0")
+        # 注意：这里什么都不干，不早退，让 remaining 保持为 qty_input
+    else:
+        # 2. 按销项票日期 FIFO 排序
+        def _get_sales_date(rec: Dict[str, Any]) -> int:
+            # 宜搭结构：一层是实例，真正字段在 formData 里
+            data = rec.get("formData") if isinstance(rec, dict) else None
+            row = data or rec
+            v = row.get("dateField_mh8x8uxc")
+            try:
+                return int(v)
+            except Exception:
+                return 0
 
-    # 2. 按销项票日期 FIFO 排序
-    def _get_sales_date(rec: Dict[str, Any]) -> int:
-        # 宜搭结构：一层是实例，真正字段在 formData 里
-        data = rec.get("formData") if isinstance(rec, dict) else None
-        row = data or rec
-        v = row.get("dateField_mh8x8uxc")
-        try:
-            return int(v)
-        except Exception:
-            return 0
-
-    records_sorted = sorted(records, key=_get_sales_date)
-
-    used_total = Decimal("0")
-    logger.info(
-        "[offset_estimates_for_product] start offset, product_code={}, qty_input={}, estimate_count={}",
-        product_code, qty_input, len(records_sorted),
-    )
-
-    for rec in records_sorted:
-        if remaining <= 0:
-            break
-
-        # 外层实例 ID
-        cost_id = rec.get("formInstanceId") or rec.get("id")
-        if not cost_id:
-            logger.warning("[offset_estimates_for_product] record without id: {}", rec)
-            continue
-
-        # 真正的字段在 formData 里
-        data = rec.get("formData") if isinstance(rec, dict) else None
-        row = data or rec
-
-        try:
-            est_qty = Decimal(str(row.get("textField_mh8x8uxa") or "0"))
-        except Exception:
-            logger.error(
-                "[offset_estimates_for_product] invalid est qty for record_id={}, row={}",
-                cost_id,
-                row,
-            )
-            continue
-
-        if est_qty <= 0:
-            continue
-
-        sales_date = row.get("dateField_mh8x8uxc")
-        product_name = row.get("textField_mh8x8uwz", "")
-        batch_no = row.get("textField_mh8x8ux0", "")
-        customer = row.get("textField_mh8x8ux1", "")
-        invoice_type = row.get("textField_mh8x8ux8", "")
-        sales_invoice_no = row.get("textField_mh8x8ux9", "")
-        sales_order_no = row.get("textField_mh8x8uxb", "")
+        records_sorted = sorted(records, key=_get_sales_date)
 
         logger.info(
-            "[offset_estimates_for_product] record id={}, est_qty={}, remaining={}",
-            cost_id, est_qty, remaining,
+            "[offset_estimates_for_product] start offset, product_code={}, qty_input={}, estimate_count={}",
+            product_code, qty_input, len(records_sorted),
         )
 
-        # 情况①：进项数量 >= 暂估数量 → 原记录改为“已收票”
-        if remaining >= est_qty:
-            used_here = est_qty
-            remaining -= used_here
-            used_total += used_here
+        for rec in records_sorted:
+            if remaining <= 0:
+                break
 
-            update_data = dict(invoice_info or {})
-            update_data["textField_mh8x8uxk"] = "已收票"         # 状态
-            update_data["textField_mh8x8uxa"] = str(est_qty)    # 数量保持原值（代表这条已全部收票）
+            # 外层实例 ID
+            cost_id = rec.get("formInstanceId") or rec.get("id")
+            if not cost_id:
+                logger.warning("[offset_estimates_for_product] record without id: {}", rec)
+                continue
 
-            logger.info(
-                "[offset_estimates_for_product] full offset: cost_id={}, used={}, remaining={}",
-                cost_id, used_here, remaining,
-            )
-            update_cost_record(cost_id, update_data)
+            # 真正的字段在 formData 里
+            data = rec.get("formData") if isinstance(rec, dict) else None
+            row = data or rec
 
-        else:
-            # 情况②：进项数量 < 暂估数量 → 拆分
-            used_here = remaining
-            remaining = Decimal("0")
-            used_total += used_here
+            try:
+                est_qty = Decimal(str(row.get("textField_mh8x8uxa") or "0"))
+            except Exception:
+                logger.error(
+                    "[offset_estimates_for_product] invalid est qty for record_id={}, row={}",
+                    cost_id,
+                    row,
+                )
+                continue
 
-            remain_est = est_qty - used_here
+            if est_qty <= 0:
+                continue
 
-            # ②-a 原记录改为剩余“暂估”
-            update_data_est = {
-                "textField_mh8x8uxa": str(remain_est),
-                "textField_mh8x8uxk": "暂估",
-            }
-            logger.info(
-                "[offset_estimates_for_product] partial offset: cost_id={}, used={}, remain_est={}",
-                cost_id, used_here, remain_est,
-            )
-            update_cost_record(cost_id, update_data_est)
-
-            # ②-b 新增一条“已收票”记录
-            new_data = new_cost_record(
-                date=sales_date,
-                product_name=product_name,
-                batch_no=batch_no,
-                customer=customer,
-                invoice_type=invoice_type,
-                invoice_no=sales_invoice_no,
-                qty=str(used_here),
-                sales_order_no=sales_order_no,
-                status="已收票",
-            )
-            # 把本次进项的发票信息同步进去（供应商等）
-            new_data.update(invoice_info or {})
+            sales_date = row.get("dateField_mh8x8uxc")
+            product_name = row.get("textField_mh8x8uwz", "")
+            batch_no = row.get("textField_mh8x8ux0", "")
+            customer = row.get("textField_mh8x8ux1", "")
+            invoice_type = row.get("textField_mh8x8ux8", "")
+            sales_invoice_no = row.get("textField_mh8x8ux9", "")
+            sales_order_no = row.get("textField_mh8x8uxb", "")
 
             logger.info(
-                "[offset_estimates_for_product] create new cost_record for used part: {}",
-                new_data,
+                "[offset_estimates_for_product] record id={}, est_qty={}, remaining={}",
+                cost_id, est_qty, remaining,
             )
-            insert_cost_record([new_data])
-            break  # 进项数量已经用完
+
+            # 情况①：进项数量 >= 暂估数量 → 原记录改为“已收票”
+            if remaining >= est_qty:
+                used_here = est_qty
+                remaining -= used_here
+                used_total += used_here
+
+                update_data = dict(invoice_info or {})
+                update_data["textField_mh8x8uxk"] = "已收票"         # 状态
+                update_data["textField_mh8x8uxa"] = str(est_qty)    # 数量保持原值（代表这条已全部收票）
+
+                logger.info(
+                    "[offset_estimates_for_product] full offset: cost_id={}, used={}, remaining={}",
+                    cost_id, used_here, remaining,
+                )
+                update_cost_record(cost_id, update_data)
+
+            else:
+                # 情况②：进项数量 < 暂估数量 → 拆分
+                used_here = remaining
+                remaining = Decimal("0")
+                used_total += used_here
+
+                remain_est = est_qty - used_here
+
+                # ②-a 原记录改为剩余“暂估”
+                update_data_est = {
+                    "textField_mh8x8uxa": str(remain_est),
+                    "textField_mh8x8uxk": "暂估",
+                }
+                logger.info(
+                    "[offset_estimates_for_product] partial offset: cost_id={}, used={}, remain_est={}",
+                    cost_id, used_here, remain_est,
+                )
+                update_cost_record(cost_id, update_data_est)
+
+                # ②-b 新增一条“已收票”记录
+                new_data = new_cost_record(
+                    date=sales_date,
+                    product_name=product_name,
+                    batch_no=batch_no,
+                    customer=customer,
+                    invoice_type=invoice_type,
+                    invoice_no=sales_invoice_no,
+                    qty=str(used_here),
+                    sales_order_no=sales_order_no,
+                    status="已收票",
+                )
+                # 把本次进项的发票信息同步进去（供应商等）
+                new_data.update(invoice_info or {})
+
+                logger.info(
+                    "[offset_estimates_for_product] create new cost_record for used part: {}",
+                    new_data,
+                )
+                insert_cost_record([new_data])
+                break  # 进项数量已经用完
 
     # 3. 剩余数量入【进项票库存】
-    remain_for_inventory = remaining  # 剩下的就是进库存的
+    #   - 有暂估：remaining = qty_input - used_total
+    #   - 无暂估：remaining = qty_input
+    remain_for_inventory = remaining
     if remain_for_inventory > 0:
         _append_inventory_by_new_record(product_code, remain_for_inventory, invoice_info)
 
-    # 4. 更新进项表总数量
-    # 1. 如果产品信息表，就更新进项票总数 2.如果没有，就新增一条
-    
     # 4. 更新进项表总数量：无论是否冲销暂估，产品信息表都要累计本次进项总量
     try:
+        logger.info(
+            "[offset_estimates_for_product更新进项表总数量] call update_product_info_table: product_code=%s, qty_input=%s",
+            product_code, qty_input,
+        )
         update_product_info_table(product_code, "进项票", int(qty_input))
     except Exception as e:
         logger.error(
@@ -507,6 +508,7 @@ def offset_estimates_for_product(
     )
 
     return used_total
+
 
 
 
