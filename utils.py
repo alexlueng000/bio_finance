@@ -104,6 +104,8 @@ def get_product_info(product_no: str) -> Optional[Dict[str, Any]]:
         "Content-Type": "application/json",
     }
 
+    logger.info("[get_product_info产品信息表] product_no={}", product_no)
+
     body = {
         "appType": "APP_JSXMR8UNH0GRZUNHO3Y2",
         "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",
@@ -117,7 +119,7 @@ def get_product_info(product_no: str) -> Optional[Dict[str, Any]]:
 
     resp = requests.post(SEARCH_REQUEST_URL, headers=headers, data=json.dumps(body))
     text = resp.text
-    logger.info("[get_product_info产品信息表] http_status=%s, raw_body=%s",
+    logger.info("[get_product_info产品信息表] http_status={}, raw_body={}",
                 resp.status_code, text)
 
     try:
@@ -128,7 +130,7 @@ def get_product_info(product_no: str) -> Optional[Dict[str, Any]]:
         except Exception:
             err_json = None
         logger.error(
-            "[get_product_info产品信息表] HTTPError status=%s, body_text=%s, body_json=%s",
+            "[get_product_info产品信息表] HTTPError status={}, body_text={}, body_json={}",
             resp.status_code,
             text,
             err_json,
@@ -162,12 +164,12 @@ def insert_product_into(product: Dict[str, Any]) -> None:
         ],
     }
 
-    logger.info("[insert_product_into产品信息表] request body=%s", body)
+    logger.info("[insert_product_into产品信息表] request body={}", body)
 
     resp = requests.post(INSERT_INSTANCE_URL, headers=headers, data=json.dumps(body))
     text = resp.text
     logger.info(
-        "[insert_product_into产品信息表] http_status=%s, raw_body=%s",
+        "[insert_product_into产品信息表] http_status={}, raw_body={}",
         resp.status_code,
         text,
     )
@@ -180,7 +182,7 @@ def insert_product_into(product: Dict[str, Any]) -> None:
         except Exception:
             err_json = None
         logger.error(
-            "[insert_product_into产品信息表] HTTPError status=%s, body_text=%s, body_json=%s",
+            "[insert_product_into产品信息表] HTTPError status={}, body_text={}, body_json={}",
             resp.status_code,
             text,
             err_json,
@@ -248,26 +250,26 @@ def update_product_info_table(product_no: str, invoice_type: str, invoice_number
         }
 
         logger.info(
-            "[update_product_info_table] update product_no=%s, form_instance_id=%s, form_data=%s",
+            "[update_product_info_table更新产品信息表] update product_no={}, form_instance_id={}, form_data={}",
             product_no, form_instance_id, form_data,
         )
 
         try:
             resp = requests.put(UPDATE_INSTANCE_URL, headers=headers, data=json.dumps(body))
             resp.raise_for_status()
-            logger.info("[update_product_info_table] update success, resp=%s", resp.json())
+            logger.info("[update_product_info_table更新产品信息表] update success, resp={}", resp.json())
         except requests.exceptions.HTTPError as e:
-            logger.error("[update_product_info_table] HTTPError on update: %s, body=%s",
+            logger.error("[update_product_info_table更新产品信息表] HTTPError on update: {}, body={}",
                          e, getattr(e.response, "text", ""))
             raise
         except Exception as e:
-            logger.error("[update_product_info_table] update failed: %s", e)
+            logger.error("[update_product_info_table更新产品信息表] update failed: {}", e)
             raise
 
     else:
         # ============= 3B. 新建记录 =============
         logger.info(
-            "[update_product_info_table] create product_no=%s, form_data=%s",
+            "[update_product_info_table新建产品] create product_no={}, form_data={}",
             product_no, form_data,
         )
         insert_product_into(form_data)
