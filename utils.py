@@ -97,6 +97,8 @@ def new_product_info(product_name, product_no, input_total, output_total):
 
 
 # 查询产品信息
+from typing import Optional, Dict, Any, List
+
 def get_product_info(product_no: str) -> Optional[Dict[str, Any]]:
     access_token = get_dingtalk_access_token()
     headers = {
@@ -104,23 +106,17 @@ def get_product_info(product_no: str) -> Optional[Dict[str, Any]]:
         "Content-Type": "application/json",
     }
 
-    logger.info("[get_product_info产品信息表] product_no={}", product_no)
-
     body = {
         "appType": "APP_JSXMR8UNH0GRZUNHO3Y2",
         "systemToken": "RUA667B1BS305G1LK1HTH4U1WJS73Z1RVKBHMC29",
         "formUuid": product_info_table,
         "userId": "203729096926868966",
-        "searchFieldJson": json.dumps(
-            {"textField_miyahqmm": product_no},  # 产品编号
-            ensure_ascii=False
-        ),
+        "searchFieldJson": json.dumps({"textField_miyahqmm": product_no}, ensure_ascii=False),
     }
 
+    logger.info("[get_product_info产品信息表] product_no={}", product_no)
     resp = requests.post(SEARCH_REQUEST_URL, headers=headers, data=json.dumps(body))
     text = resp.text
-    logger.info("[get_product_info产品信息表] http_status={}, raw_body={}",
-                resp.status_code, text)
 
     try:
         resp.raise_for_status()
@@ -137,9 +133,34 @@ def get_product_info(product_no: str) -> Optional[Dict[str, Any]]:
         )
         raise
 
-    # ✅ 正常返回：找到第一条记录 / 找不到返回 None
-    data = (resp.json().get("result") or {}).get("data") or []
-    return data[0] if data else None
+    j = resp.json()
+
+    # 兼容两种结构：{ "result": { "data": [...] }} 或 { "data": [...] }
+    if "result" in j:
+        data_list: List[Dict[str, Any]] = (j.get("result") or {}).get("data") or []
+    else:
+        data_list = j.get("data") or []
+
+    if not data_list:
+        logger.info("[get_product_info产品信息表] no record found for product_no=%s", product_no)   
+        return None
+
+    # 如果同一产品号有多条记录，取最近修改的一条
+    data_list_sorted = sorted(
+        data_list,
+        key=lambda x: x.get("modifiedTimeGMT") or x.get("createdTimeGMT") or "",
+        reverse=True,
+    )
+    instance = data_list_sorted[0]
+    logger.info(
+        "[get_product_info产品信息表] found %s records, use formInstanceId=%s, input_total=%s, output_total=%s",
+        len(data_list_sorted),
+        instance.get("formInstanceId"),
+        (instance.get("formData") or {}).get("textField_miyahqmn"),
+        (instance.get("formData") or {}).get("textField_miyahqmk"),
+    )
+    return instance
+
 
     
 # 新增产品信息表数据
